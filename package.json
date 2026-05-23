@@ -37,7 +37,14 @@
       "menuCategory": "Media",
       "installerSidebar": null,
       "uninstallDisplayName": "Accessible Media Player"
-    }
+    },
+    "files": [
+      "index.html",
+      "main.js",
+      "renderer.js",
+      "style.css",
+      "package.json"
+    ]
   },
   "keywords": [],
   "author": "Aarya",
