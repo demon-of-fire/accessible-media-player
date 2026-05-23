@@ -1,0 +1,546 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Accessible Media Player</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app-container" role="application" aria-label="Media Player">
+    <div id="live-region" class="sr-only" aria-live="assertive" aria-atomic="true"></div>
+
+    <div id="video-wrapper">
+      <video id="media-player" controlsList="nodownload noplaybackrate" crossorigin="anonymous"></video>
+      
+      <!-- Audio Visualizer (Hidden for videos) -->
+      <div id="audio-visualizer" aria-hidden="true" style="display: none;">
+         <canvas id="visualizer-canvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1;"></canvas>
+         <svg class="music-icon" viewBox="0 0 24 24" style="position: relative; z-index: 2; opacity: 0.2; pointer-events: none;"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+      </div>
+
+      <!-- Center Animation Overlay -->
+      <div id="center-icon-overlay" aria-hidden="true">
+         <svg id="center-play-icon" viewBox="0 0 24 24" style="display:none;"><path d="M8 5v14l11-7z"/></svg>
+         <svg id="center-pause-icon" viewBox="0 0 24 24" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+      </div>
+
+      <!-- Top Bar -->
+      <div id="top-bar" class="fade-element active" style="-webkit-app-region: drag;">
+        <div class="top-bar-left" style="display: flex; gap: 10px; -webkit-app-region: no-drag; margin-left: 10px;">
+          <button id="settings-btn" class="icon-btn tooltip" aria-label="Settings" data-tooltip="Settings (E)">
+             <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.49-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+          </button>
+          <button id="open-btn" class="icon-btn tooltip" aria-label="Insert Media" data-tooltip="Insert Media (Ctrl+O)">
+             <svg viewBox="0 0 24 24" style="width: 24px; height: 24px;"><path fill="currentColor" d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/></svg>
+          </button>
+        </div>
+        <div id="title-display" style="flex:1; text-align:center;">No media loaded</div>
+        <div class="top-bar-right" style="display: flex; gap: 10px; -webkit-app-region: no-drag; margin-right: 10px;">
+          <button id="bookmarks-toggle-btn" class="icon-btn tooltip" aria-label="Toggle Bookmarks" data-tooltip="Bookmarks (B)">
+             <svg viewBox="0 0 24 24" style="width: 24px; height: 24px;"><path fill="currentColor" d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2zm0 15l-5-2.18L7 18V5h10v13z"/></svg>
+          </button>
+          <button id="playlist-toggle-btn" class="icon-btn tooltip" aria-label="Toggle Playlist" data-tooltip="Playlist (Q)">
+             <svg viewBox="0 0 24 24"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Bottom Controls -->
+      <div id="controls-overlay" class="fade-element active controls-overlay" role="toolbar" aria-label="Media Controls">
+        <div class="progress-container">
+          <label for="progress-slider" class="sr-only">Seek progress</label>
+          <input type="range" id="progress-slider" min="0" max="100" step="0.1" value="0" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Seek progress">
+        </div>
+
+        <div class="bottom-controls-row">
+          <div class="left-controls">
+            <button id="prev-track-btn" class="icon-btn tooltip" aria-label="Previous Track" data-tooltip="Previous Track">
+              <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+            </button>
+            <button id="play-btn" class="icon-btn tooltip" aria-pressed="false" aria-label="Play" data-tooltip="Play (Space)">
+              <svg id="play-icon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+              <svg id="pause-icon" viewBox="0 0 24 24" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+            </button>
+            <button id="next-track-btn" class="icon-btn tooltip" aria-label="Next Track" data-tooltip="Next Track">
+              <svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+            </button>
+
+            <button id="rewind-btn" class="icon-btn tooltip" aria-label="Rewind 10 seconds" data-tooltip="Rewind 10s (Left Arrow)">
+              <svg viewBox="0 0 24 24"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg>
+            </button>
+            <button id="forward-btn" class="icon-btn tooltip" aria-label="Forward 10 seconds" data-tooltip="Forward 10s (Right Arrow)">
+              <svg viewBox="0 0 24 24"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/></svg>
+            </button>
+            
+            <div class="volume-group tooltip" data-tooltip="Volume (Up/Down)">
+              <button id="mute-btn" class="icon-btn" aria-pressed="false" aria-label="Mute" data-tooltip="Mute (M)">
+                <svg id="vol-up-icon" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+                <svg id="vol-mute-icon" viewBox="0 0 24 24" style="display:none;"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+              </button>
+              <label for="volume-slider" class="sr-only">Volume</label>
+              <input type="range" id="volume-slider" min="0" max="100" value="100" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" aria-valuetext="100 percent" aria-label="Volume">
+            </div>
+
+            <span id="time-display" aria-hidden="true">00:00 / 00:00</span>
+          </div>
+
+          <div class="right-controls">
+            <button id="speed-btn" class="text-btn tooltip" aria-label="Playback Speed" data-tooltip="Speed (Shift+Arrows)">1x</button>
+            <button id="loop-btn" class="icon-btn tooltip" aria-pressed="false" aria-label="Toggle Loop" data-tooltip="Loop (L)">
+              <svg viewBox="0 0 24 24"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
+            </button>
+            <button id="main-add-bookmark-btn" class="icon-btn tooltip" aria-label="Add Bookmark" data-tooltip="Bookmark (Shift+B)">
+              <svg viewBox="0 0 24 24"><path d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2zm0 15l-5-2.18L7 18V5h10v13z"/></svg>
+            </button>
+            <button id="pip-btn" class="icon-btn tooltip" aria-pressed="false" aria-label="Picture in Picture" data-tooltip="Picture in Picture (P)">
+              <svg viewBox="0 0 24 24"><path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 1.98 2 1.98h18c1.1 0 2-.88 2-1.98V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/></svg>
+            </button>
+            <button id="more-options-toggle-btn" class="icon-btn tooltip" aria-label="Toggle More Options Sidebar" data-tooltip="More Options (O)">
+              <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+            </button>
+            <button id="fullscreen-btn" class="icon-btn tooltip" aria-pressed="false" aria-label="Toggle Fullscreen" data-tooltip="Fullscreen (F)">
+              <svg id="fs-enter-icon" viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+              <svg id="fs-exit-icon" viewBox="0 0 24 24" style="display:none;"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Drag overlay -->
+      <div id="drag-overlay">
+        <h2>Drop media files here to queue</h2>
+      </div>
+    </div>
+    
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal" aria-hidden="true" style="display:none;">
+      <div class="modal-content" role="dialog" aria-label="Application Settings" style="min-width: 650px; padding: 0;">
+        <div class="settings-header" style="display:flex; justify-content:space-between; align-items:center; padding: 15px 20px; border-bottom: 1px solid #333; background: #111; border-radius: 8px 8px 0 0;">
+          <h2 style="margin:0; font-size: 1.3rem;">Settings</h2>
+          <button id="close-settings-btn" class="icon-btn" aria-label="Close Settings">
+             <svg viewBox="0 0 24 24" style="width:24px;height:24px;"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
+        </div>
+        
+        <div class="settings-body" style="display: flex; height: 450px;">
+          <div class="settings-sidebar" style="width: 160px; background: #1a1a1a; border-right: 1px solid #333; display: flex; flex-direction: column;" role="tablist">
+            <button class="tab-btn active" role="tab" aria-selected="true" data-target="audio-settings">Audio</button>
+            <button class="tab-btn" role="tab" aria-selected="false" data-target="video-settings">Video</button>
+            <button class="tab-btn" role="tab" aria-selected="false" data-target="access-settings">Accessibility</button>
+            <button class="tab-btn" role="tab" aria-selected="false" data-target="general-settings">General</button>
+          </div>
+          
+          <div class="tab-content-area" style="flex: 1; padding: 25px; overflow-y: auto;">
+            <!-- Audio -->
+            <div id="audio-settings" class="tab-pane active" role="tabpanel">
+               <h3 style="margin-top:0;">10-Band Equalizer & Overdrive</h3>
+               <div class="boost-group">
+                 <label for="boost-slider">Pre-Amp Volume Overdrive (<span id="boost-val">100</span>%)</label>
+                 <input type="range" id="boost-slider" min="1" max="2" step="0.1" value="1" aria-label="Volume Overdrive">
+               </div>
+               <div class="eq-bands">
+                 <!-- Populated by JS -->
+               </div>
+               
+               <h3 style="margin-top: 30px;">Stereo Panning</h3>
+               <div class="boost-group">
+                 <label for="pan-slider">Balance: <span id="pan-val">Center</span></label>
+                 <input type="range" id="pan-slider" min="-1" max="1" step="0.1" value="0" aria-label="Stereo Panner">
+               </div>
+               <div style="margin-top:25px;">
+                 <button id="eq-reset-btn" class="action-btn">Reset Audio Settings</button>
+               </div>
+            </div>
+            
+            <!-- Video -->
+            <div id="video-settings" class="tab-pane" role="tabpanel" style="display:none;">
+               <h3 style="margin-top:0;">Subtitles (.vtt / .srt)</h3>
+               <div style="display:flex; gap:10px; margin-bottom: 30px;">
+                 <button id="load-subs-btn" class="action-btn">Load Subtitles File</button>
+                 <button id="clear-subs-btn" class="action-btn">Clear Subtitles</button>
+               </div>
+               
+               <h3>Video Filters</h3>
+               <div class="boost-group">
+                 <label for="brightness-slider">Brightness: <span id="brightness-val">100</span>%</label>
+                 <input type="range" id="brightness-slider" class="video-filter" min="0" max="200" value="100" aria-label="Brightness">
+               </div>
+               <div class="boost-group">
+                 <label for="contrast-slider">Contrast: <span id="contrast-val">100</span>%</label>
+                 <input type="range" id="contrast-slider" class="video-filter" min="0" max="200" value="100" aria-label="Contrast">
+               </div>
+               <div class="boost-group">
+                 <label for="saturation-slider">Saturation: <span id="saturation-val">100</span>%</label>
+                 <input type="range" id="saturation-slider" class="video-filter" min="0" max="200" value="100" aria-label="Saturation">
+               </div>
+               <div style="margin-top:25px;">
+                 <button id="video-reset-btn" class="action-btn">Reset Filters</button>
+               </div>
+            </div>
+            
+            <!-- Accessibility -->
+            <div id="access-settings" class="tab-pane" role="tabpanel" style="display:none;">
+               <h3 style="margin-top:0;">Visual & UI</h3>
+               <div style="display:flex; flex-direction:column; gap: 15px; margin-bottom: 30px;">
+                 <label class="toggle-label" style="display:flex; align-items:center; gap: 10px; cursor:pointer;">
+                   <input type="checkbox" id="high-contrast-toggle" style="width: 18px; height: 18px;"> Enable High Contrast UI
+                 </label>
+                 <label class="toggle-label" style="display:flex; align-items:center; gap: 10px; cursor:pointer;">
+                   <input type="checkbox" id="large-text-toggle" style="width: 18px; height: 18px;"> Enable Large Text
+                 </label>
+               </div>
+               
+               <h3>Screen Reader Cues</h3>
+               <label class="toggle-label" style="display:flex; align-items:center; gap: 10px; cursor:pointer;">
+                 <input type="checkbox" id="verbose-announce-toggle" checked style="width: 18px; height: 18px;"> Verbose Announcements
+               </label>
+               <p style="font-size: 0.85rem; color:#aaa; margin-top:5px; line-height: 1.4;">If enabled, the media player will verbally announce every interaction (e.g. Mute on/off). Disable to only announce critical changes.</p>
+            </div>
+            
+            <!-- General -->
+            <div id="general-settings" class="tab-pane" role="tabpanel" style="display:none;">
+               <h3 style="margin-top:0;">Application Behavior</h3>
+               <div style="display:flex; flex-direction:column; gap: 15px;">
+                 <label class="toggle-label" style="display:flex; align-items:center; gap: 10px; cursor:pointer;">
+                   <input type="checkbox" id="autoplay-toggle" checked style="width: 18px; height: 18px;"> Autoplay next track in playlist
+                 </label>
+                 <label class="toggle-label" style="display:flex; align-items:center; gap: 10px; cursor:pointer;">
+                   <input type="checkbox" id="shuffle-toggle" style="width: 18px; height: 18px;"> Shuffle Queue
+                 </label>
+               </div>
+            </div>
+            
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Create Playlist Modal -->
+    <div id="create-playlist-modal" class="modal" aria-hidden="true" style="display:none;">
+      <div class="modal-content" role="dialog" aria-label="Create Playlist Builder" style="min-width: 550px; padding: 0;">
+        <div class="settings-header" style="display:flex; justify-content:space-between; align-items:center; padding: 15px 20px; border-bottom: 1px solid #333; background: #111; border-radius: 8px 8px 0 0;">
+          <h2 style="margin:0; font-size: 1.3rem;">Create New Playlist</h2>
+          <button id="close-builder-btn" class="icon-btn" aria-label="Close Builder">
+             <svg viewBox="0 0 24 24" style="width:24px;height:24px;"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
+        </div>
+        
+        <div style="padding: 20px; display: flex; flex-direction: column; gap: 15px; height: 400px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-weight: bold;">Files in new playlist:</span>
+            <button id="builder-add-files-btn" class="action-btn">Add Files</button>
+          </div>
+          
+          <ul id="builder-file-list" style="flex: 1; overflow-y: auto; list-style: none; margin: 0; padding: 0; border: 1px solid #333; background: #1a1a1a; border-radius: 4px;" aria-live="polite">
+            <!-- Builder items -->
+          </ul>
+          
+          <div style="display: flex; justify-content: flex-end;">
+            <button id="builder-save-btn" class="action-btn" style="background: var(--focus-color); color: #000;">Save Playlist (.amp)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Playlist Sidebar -->
+    <div id="playlist-sidebar" aria-label="Playlist" aria-hidden="true">
+      <div class="playlist-header">
+        <h2 style="font-size: 1.3rem;">Queue</h2>
+        <div class="header-btns">
+          <button id="create-playlist-btn" class="icon-btn tooltip" aria-label="Create Playlist" data-tooltip="Create New Playlist">
+            <svg viewBox="0 0 24 24"><path d="M14 10H2v2h12v-2zm0-4H2v2h12V6zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM2 16h8v-2H2v2z"/></svg>
+          </button>
+          <button id="save-playlist-btn" class="icon-btn tooltip" aria-label="Save Playlist" data-tooltip="Save Queue (.amp)">
+            <svg viewBox="0 0 24 24"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
+          </button>
+          <button id="load-playlist-btn" class="icon-btn tooltip" aria-label="Load Playlist" data-tooltip="Load Queue (.amp)">
+            <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+          </button>
+          <button id="clear-playlist-btn" class="action-btn-small" aria-label="Clear Playlist">Clear</button>
+          <button id="close-playlist-btn" class="icon-btn" aria-label="Close Playlist" style="margin-left: 5px;">
+             <svg viewBox="0 0 24 24" style="width:24px;height:24px;"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
+        </div>
+      </div>
+      <ul id="playlist-items" aria-live="polite">
+        <!-- Items -->
+      </ul>
+    </div>
+
+    <!-- Bookmarks Sidebar (Only Bookmarks) -->
+    <div id="bookmarks-sidebar" aria-label="Bookmarks Panel" aria-hidden="true">
+      <div class="playlist-header">
+        <h2 style="font-size: 1.3rem;">Saved Bookmarks</h2>
+        <button id="close-bookmarks-btn" class="icon-btn" aria-label="Close Bookmarks">
+           <svg viewBox="0 0 24 24" style="width:24px;height:24px;"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </div>
+
+      <div style="flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 20px;">
+        <button id="sidebar-add-bookmark-btn" class="action-btn" style="background: var(--focus-color); color: #000; display: flex; align-items: center; justify-content: center; gap: 8px;">
+          <svg viewBox="0 0 24 24" style="width: 18px; height: 18px; fill: currentColor;"><path d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z"/></svg> Add Bookmark (Shift+B)
+        </button>
+
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <ul id="bookmarks-sidebar-list" style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px;" aria-live="polite">
+            <!-- Bookmarks loaded here -->
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- More Options Sidebar (Advanced Controls) -->
+    <div id="more-options-sidebar" aria-label="More Options Panel" aria-hidden="true">
+      <div class="playlist-header">
+        <h2 style="font-size: 1.3rem;">More Options</h2>
+        <button id="close-more-options-btn" class="icon-btn" aria-label="Close More Options">
+           <svg viewBox="0 0 24 24" style="width:24px;height:24px;"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </div>
+
+      <div style="flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 20px;">
+        <!-- Quick Actions -->
+        <div style="background: #252525; padding: 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 10px; border: 1px solid #333;">
+          <h3 style="margin: 0; font-size: 1rem; color: var(--focus-color);">Quick Actions</h3>
+          <div style="display: flex; gap: 8px;">
+            <button id="goto-time-btn" class="action-btn" style="flex: 1; font-size: 0.85rem; padding: 8px;">Go to Time (Ctrl+G)</button>
+            <button id="screenshot-btn" class="action-btn" style="flex: 1; font-size: 0.85rem; padding: 8px; display: flex; align-items: center; justify-content: center; gap: 4px;">
+              <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor;"><path d="M9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg> Capture Frame (S)
+            </button>
+          </div>
+        </div>
+
+        <!-- Concert Room Echo Effect -->
+        <div style="background: #252525; padding: 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 10px; border: 1px solid #333;">
+          <h3 style="margin: 0; font-size: 1rem; color: var(--focus-color);">Concert Echo Effect</h3>
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <label for="echo-effect-toggle" style="font-size: 0.85rem; color: #ccc;">Enable Room Reverb:</label>
+            <input type="checkbox" id="echo-effect-toggle" aria-label="Enable Concert Echo Effect" style="width: 18px; height: 18px; cursor: pointer;">
+          </div>
+        </div>
+
+        <!-- Fine Video Filters -->
+        <div style="background: #252525; padding: 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 10px; border: 1px solid #333;">
+          <h3 style="margin: 0; font-size: 1rem; color: var(--focus-color);">Advanced Video Filters</h3>
+          <div class="boost-group">
+            <label for="hue-slider">Color Hue Phase: <span id="hue-val">0</span>Â°</label>
+            <input type="range" id="hue-slider" class="video-filter" min="0" max="360" value="0" aria-label="Color Hue Phase">
+          </div>
+          <div class="boost-group">
+            <label for="blur-slider">Video Soft Focus: <span id="blur-val">0</span>px</label>
+            <input type="range" id="blur-slider" class="video-filter" min="0" max="10" value="0" aria-label="Video Soft Focus">
+          </div>
+        </div>
+
+        <!-- Subtitle Styling Stylist -->
+        <div style="background: #252525; padding: 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 10px; border: 1px solid #333;">
+          <h3 style="margin: 0; font-size: 1rem; color: var(--focus-color);">Subtitle Customization</h3>
+          
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <span style="font-size: 0.85rem; color: #ccc;">Font Size:</span>
+            <select id="sub-size-select" aria-label="Subtitle Font Size" style="background: #333; color: white; border: 1px solid #444; padding: 5px; border-radius: 4px; font-size: 0.85rem;">
+              <option value="1.8rem">Medium (Default)</option>
+              <option value="1.2rem">Small</option>
+              <option value="2.4rem">Large</option>
+              <option value="3.0rem">Extra Large</option>
+            </select>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <span style="font-size: 0.85rem; color: #ccc;">Text Color:</span>
+            <select id="sub-color-select" aria-label="Subtitle Text Color" style="background: #333; color: white; border: 1px solid #444; padding: 5px; border-radius: 4px; font-size: 0.85rem;">
+              <option value="#ffff00">Vibrant Yellow (Default)</option>
+              <option value="#ffffff">Classic White</option>
+              <option value="#00ffff">Cyan Blue</option>
+              <option value="#00ff00">Accessible Green</option>
+            </select>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <span style="font-size: 0.85rem; color: #ccc;">Background Shading:</span>
+            <select id="sub-bg-select" aria-label="Subtitle Background Shading" style="background: #333; color: white; border: 1px solid #444; padding: 5px; border-radius: 4px; font-size: 0.85rem;">
+              <option value="rgba(0, 0, 0, 0.85)">Dark Charcoal (Default)</option>
+              <option value="rgba(0, 0, 0, 0.5)">Semi-Transparent</option>
+              <option value="#000000">Solid Pitch Black</option>
+              <option value="transparent">Transparent (None)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Playback Adjustments -->
+        <div style="background: #252525; padding: 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 10px; border: 1px solid #333;">
+          <h3 style="margin: 0; font-size: 1rem; color: var(--focus-color);">Video & Speed Adjust</h3>
+          
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <span style="font-size: 0.85rem; color: #ccc;">Playback Speed: <span id="speed-label-val" style="font-weight: bold; color: var(--focus-color);">1.0x</span></span>
+            <div style="display: flex; gap: 5px;">
+              <button id="speed-minus-btn" class="action-btn-small" style="flex: 1; font-size: 0.8rem; padding: 4px;">-0.1x</button>
+              <button id="speed-reset-btn" class="action-btn-small" style="flex: 1; font-size: 0.8rem; padding: 4px;">1.0x</button>
+              <button id="speed-plus-btn" class="action-btn-small" style="flex: 1; font-size: 0.8rem; padding: 4px;">+0.1x</button>
+            </div>
+            <select id="speed-select-preset" aria-label="Speed Preset" style="background: #333; color: white; border: 1px solid #444; padding: 4px; border-radius: 4px; font-size: 0.85rem; margin-top: 2px;">
+              <option value="1.0">Normal Speed (1.0x)</option>
+              <option value="0.25">0.25x</option>
+              <option value="0.5">0.5x</option>
+              <option value="0.75">0.75x</option>
+              <option value="1.25">1.25x</option>
+              <option value="1.5">1.5x</option>
+              <option value="1.75">1.75x</option>
+              <option value="2.0">2.0x</option>
+              <option value="3.0">3.0x</option>
+            </select>
+          </div>
+
+          <div style="display: flex; gap: 8px;">
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+              <span style="font-size: 0.8rem; color: #ccc;">Aspect Ratio:</span>
+              <select id="aspect-ratio-select" aria-label="Aspect Ratio" style="background: #333; color: white; border: 1px solid #444; padding: 4px; border-radius: 4px; font-size: 0.8rem;">
+                <option value="default">Default</option>
+                <option value="16:9">16:9 widescreen</option>
+                <option value="4:3">4:3 standard</option>
+                <option value="21:9">21:9 cinematic</option>
+                <option value="stretch">Stretch to Fit</option>
+              </select>
+            </div>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+              <span style="font-size: 0.8rem; color: #ccc;">Zoom Stretch:</span>
+              <select id="zoom-select" aria-label="Zoom Level" style="background: #333; color: white; border: 1px solid #444; padding: 4px; border-radius: 4px; font-size: 0.8rem;">
+                <option value="1">100% Fit</option>
+                <option value="1.2">120% Zoom</option>
+                <option value="1.5">150% Zoom</option>
+                <option value="2">200% Zoom</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 2px;">
+            <span style="font-size: 0.8rem; color: #ccc;">Frame Stepping (Paused):</span>
+            <div style="display: flex; gap: 6px;">
+              <button id="frame-back-btn" class="action-btn-small" style="flex: 1; font-size: 0.8rem; padding: 4px;">â—€ Prev Frame</button>
+              <button id="frame-forward-btn" class="action-btn-small" style="flex: 1; font-size: 0.8rem; padding: 4px;">Next Frame â–¶</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Equalizer Preset & Visualizer Theme -->
+        <div style="background: #252525; padding: 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 10px; border: 1px solid #333;">
+          <h3 style="margin: 0; font-size: 1rem; color: var(--focus-color);">Equalizer & Visuals</h3>
+          
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <span style="font-size: 0.85rem; color: #ccc;">EQ Preset:</span>
+            <select id="eq-preset-select" aria-label="Equalizer Preset" style="background: #333; color: white; border: 1px solid #444; padding: 5px; border-radius: 4px; font-size: 0.85rem;">
+              <option value="flat">Flat (Default)</option>
+              <option value="classical">Classical</option>
+              <option value="club">Club / Dance</option>
+              <option value="full-bass">Full Bass Boost</option>
+              <option value="full-treble">Full Treble Boost</option>
+              <option value="live">Live Hall</option>
+              <option value="pop">Pop</option>
+              <option value="rock">Rock</option>
+              <option value="vocal">Vocal / Dialogue</option>
+            </select>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <span style="font-size: 0.85rem; color: #ccc;">Visualizer Theme:</span>
+            <select id="visualizer-theme-select" aria-label="Visualizer Theme" style="background: #333; color: white; border: 1px solid #444; padding: 5px; border-radius: 4px; font-size: 0.85rem;">
+              <option value="spectrum">Neon Spectrum (Bars)</option>
+              <option value="circle">Circular Aura</option>
+              <option value="oscilloscope">Laser Oscilloscope</option>
+              <option value="nebula">Cosmic Starfield</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- A-B Looping -->
+        <div style="background: #252525; padding: 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 10px; border: 1px solid #333;">
+          <h3 style="margin: 0; font-size: 1rem; color: var(--focus-color);">A-B Loop</h3>
+          <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: #ccc;">
+            <span id="ab-start-label">Start (A): --:--</span>
+            <span id="ab-end-label">End (B): --:--</span>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button id="set-point-a-btn" class="action-btn" style="flex: 1; font-size: 0.8rem; padding: 6px;">Set Point A</button>
+            <button id="set-point-b-btn" class="action-btn" style="flex: 1; font-size: 0.8rem; padding: 6px;">Set Point B</button>
+          </div>
+          <button id="clear-ab-loop-btn" class="action-btn" style="font-size: 0.8rem; padding: 6px; color: #ff6b6b; border-color: rgba(255,107,107,0.3);">Clear A-B Loop</button>
+        </div>
+
+        <!-- Sleep Timer -->
+        <div style="background: #252525; padding: 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 8px; border: 1px solid #333;">
+          <h3 style="margin: 0; font-size: 1rem; color: var(--focus-color); display: flex; justify-content: space-between; align-items: center;">
+            <span>Sleep Timer</span>
+            <span id="sleep-countdown" style="font-size: 0.8rem; color: #ffb703; display: none;">--:--</span>
+          </h3>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <label for="sleep-timer-select" style="font-size: 0.85rem; color: #ccc;">Pause in:</label>
+            <select id="sleep-timer-select" style="flex: 1; background: #333; color: white; border: 1px solid #444; padding: 5px; border-radius: 4px; font-size: 0.85rem;">
+              <option value="off">Off</option>
+              <option value="5">5 Minutes</option>
+              <option value="15">15 Minutes</option>
+              <option value="30">30 Minutes</option>
+              <option value="45">45 Minutes</option>
+              <option value="60">60 Minutes</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Subtitle Sync -->
+        <div style="background: #252525; padding: 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 8px; border: 1px solid #333;">
+          <h3 style="margin: 0; font-size: 1rem; color: var(--focus-color);">Subtitle Sync</h3>
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <span style="font-size: 0.85rem; color: #ccc;">Delay Offset:</span>
+            <span id="sub-delay-val" style="font-weight: bold; color: #3ea6ff;">0.0s</span>
+          </div>
+          <div style="display: flex; gap: 5px;">
+            <button id="sub-delay-minus" class="action-btn-small" style="flex: 1;">-0.5s</button>
+            <button id="sub-delay-reset" class="action-btn-small" style="flex: 1;">Reset</button>
+            <button id="sub-delay-plus" class="action-btn-small" style="flex: 1;">+0.5s</button>
+          </div>
+        </div>
+
+        <!-- Media Info Details -->
+        <div style="background: #252525; padding: 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 8px; border: 1px solid #333;">
+          <h3 style="margin: 0; font-size: 1rem; color: var(--focus-color); display: flex; justify-content: space-between; align-items: center;">
+            <span>Media Information</span>
+            <button id="toggle-info-btn" class="action-btn-small" style="font-size: 0.75rem; padding: 2px 6px;">Show Details</button>
+          </h3>
+          <div id="media-info-panel" style="display: none; flex-direction: column; gap: 6px; font-size: 0.8rem; color: #bbb; border-top: 1px solid #333; padding-top: 8px;">
+            <div><strong>Resolution:</strong> <span id="info-resolution">N/A</span></div>
+            <div><strong>Aspect Ratio:</strong> <span id="info-aspect">N/A</span></div>
+            <div><strong>Format:</strong> <span id="info-format">N/A</span></div>
+            <div><strong>Pre-Amp boost:</strong> <span id="info-preamp">0%</span></div>
+            <div><strong>Stereo Balance:</strong> <span id="info-balance">Center</span></div>
+          </div>
+        </div>
+
+        <!-- Recent Queue History -->
+        <div style="background: #252525; padding: 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 8px; border: 1px solid #333;">
+          <h3 style="margin: 0; font-size: 1rem; color: var(--focus-color);">Recent Tracks History</h3>
+          <ul id="history-sidebar-list" style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px;">
+            <!-- History loaded here -->
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Go to Time Modal -->
+    <div id="goto-modal" class="modal" aria-hidden="true" style="display:none;">
+      <div class="modal-content" role="dialog" aria-label="Go to Time" style="min-width: 320px; padding: 20px;">
+        <h3 style="margin-top:0;">Go to Time</h3>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <label for="goto-time-input">Enter time (e.g. 1:30 or 90):</label>
+          <input type="text" id="goto-time-input" placeholder="mm:ss or seconds" style="padding:10px; background:#2a2a2a; border:1px solid #444; color:#fff; border-radius:4px; font-size: 1rem;">
+          <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:10px;">
+            <button id="close-goto-btn" class="action-btn">Cancel</button>
+            <button id="submit-goto-btn" class="action-btn" style="background:var(--focus-color); color:#000; font-weight:bold;">Go</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <script src="renderer.js"></script>
+</body>
+</html>
+

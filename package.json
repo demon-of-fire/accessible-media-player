@@ -1,0 +1,50 @@
+{
+  "name": "accessible-media-player",
+  "version": "2.0.0",
+  "description": "Accessible Media Player - A fully featured accessible media player",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/demon-of-fire/accessible-media-player"
+  },
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --publish=never",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "build": {
+    "appId": "com.accessible.mediaplayer",
+    "productName": "Accessible Media Player",
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": false,
+      "forceCodeSigning": false,
+      "verifyUpdateCodeSignature": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": null,
+      "uninstallerIcon": null,
+      "installerHeaderIcon": null,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Accessible Media Player",
+      "artifactName": "Accessible Media Player Installer.${ext}",
+      "perMachine": false,
+      "allowElevation": true,
+      "deleteAppDataOnUninstall": false,
+      "menuCategory": "Media",
+      "installerSidebar": null,
+      "uninstallDisplayName": "Accessible Media Player"
+    }
+  },
+  "keywords": [],
+  "author": "Aarya",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^42.1.0",
+    "electron-builder": "^26.8.1"
+  }
+}
