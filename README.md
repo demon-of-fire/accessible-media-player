@@ -15,9 +15,3 @@ GitHub may also show automatic "Source code" downloads on the release page. Thos
 [Download AccessibleMediaPlayer-source.zip](https://github.com/demon-of-fire/accessible-media-player/releases/download/v2.0.0/AccessibleMediaPlayer-source.zip)
 
 The installable app is separate from the source code. Use the download link above for the Windows installer.
-
-## Development
-
-1. Install dependencies with `npm install`.
-2. Start the app with `npm start`.
-3. Build the Windows installer with `npm run build`.
