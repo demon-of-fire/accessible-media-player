@@ -1,7 +1,7 @@
 {
   "name": "accessible-media-player",
-  "version": "2.0.0",
-  "description": "Accessible Media Player - A fully featured accessible media player",
+  "version": "2.1.0",
+  "description": "Accessible Media Player - A fully featured, screen-reader friendly media player",
   "repository": {
     "type": "git",
     "url": "https://github.com/demon-of-fire/accessible-media-player"
@@ -30,8 +30,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Accessible Media Player",
-      "artifactName": "Accessible Media Player Installer.${ext}",
-      "perMachine": false,
+      "artifactName": "Accessible Media Player Setup.${ext}",
+      "perMachine": true,
       "allowElevation": true,
       "deleteAppDataOnUninstall": false,
       "menuCategory": "Media",
@@ -42,8 +42,27 @@
       "index.html",
       "main.js",
       "renderer.js",
+      "features.js",
       "style.css",
       "package.json"
+    ],
+    "fileAssociations": [
+      { "ext": "mp4", "name": "AccessibleMediaPlayer.MP4", "description": "MP4 Video", "mimeType": "video/mp4" },
+      { "ext": "mkv", "name": "AccessibleMediaPlayer.MKV", "description": "MKV Video", "mimeType": "video/x-matroska" },
+      { "ext": "avi", "name": "AccessibleMediaPlayer.AVI", "description": "AVI Video", "mimeType": "video/x-msvideo" },
+      { "ext": "webm", "name": "AccessibleMediaPlayer.WEBM", "description": "WebM Video", "mimeType": "video/webm" },
+      { "ext": "ogv", "name": "AccessibleMediaPlayer.OGV", "description": "OGG Video", "mimeType": "video/ogg" },
+      { "ext": "mp3", "name": "AccessibleMediaPlayer.MP3", "description": "MP3 Audio", "mimeType": "audio/mpeg" },
+      { "ext": "wav", "name": "AccessibleMediaPlayer.WAV", "description": "WAV Audio", "mimeType": "audio/wav" },
+      { "ext": "ogg", "name": "AccessibleMediaPlayer.OGG", "description": "OGG Audio", "mimeType": "audio/ogg" },
+      { "ext": "flac", "name": "AccessibleMediaPlayer.FLAC", "description": "FLAC Audio", "mimeType": "audio/flac" },
+      { "ext": "aac", "name": "AccessibleMediaPlayer.AAC", "description": "AAC Audio", "mimeType": "audio/aac" },
+      { "ext": "m4a", "name": "AccessibleMediaPlayer.M4A", "description": "M4A Audio", "mimeType": "audio/mp4" },
+      { "ext": "wma", "name": "AccessibleMediaPlayer.WMA", "description": "WMA Audio", "mimeType": "audio/x-ms-wma" },
+      { "ext": "m4v", "name": "AccessibleMediaPlayer.M4V", "description": "M4V Video", "mimeType": "video/x-m4v" },
+      { "ext": "3gp", "name": "AccessibleMediaPlayer.3GP", "description": "3GP Video", "mimeType": "video/3gpp" },
+      { "ext": "mov", "name": "AccessibleMediaPlayer.MOV", "description": "QuickTime Movie", "mimeType": "video/quicktime" },
+      { "ext": "wmv", "name": "AccessibleMediaPlayer.WMV", "description": "WMV Video", "mimeType": "video/x-ms-wmv" }
     ]
   },
   "keywords": [],

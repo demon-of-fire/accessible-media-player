@@ -7,3 +7,6 @@ builder-debug.yml
 .DS_Store
 Thumbs.db
 *.log
+asar-extracted/
+installed-extracted/
+check*.js

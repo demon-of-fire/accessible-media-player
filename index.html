@@ -6,7 +6,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="app-container" role="application" aria-label="Media Player">
+    <div id="app-container" role="application" aria-label="Accessible Media Player">
     <div id="live-region" class="sr-only" aria-live="assertive" aria-atomic="true"></div>
 
     <div id="video-wrapper">
@@ -200,14 +200,20 @@
             <!-- General -->
             <div id="general-settings" class="tab-pane" role="tabpanel" style="display:none;">
                <h3 style="margin-top:0;">Application Behavior</h3>
-               <div style="display:flex; flex-direction:column; gap: 15px;">
-                 <label class="toggle-label" style="display:flex; align-items:center; gap: 10px; cursor:pointer;">
-                   <input type="checkbox" id="autoplay-toggle" checked style="width: 18px; height: 18px;"> Autoplay next track in playlist
-                 </label>
-                 <label class="toggle-label" style="display:flex; align-items:center; gap: 10px; cursor:pointer;">
-                   <input type="checkbox" id="shuffle-toggle" style="width: 18px; height: 18px;"> Shuffle Queue
-                 </label>
-               </div>
+                <div style="display:flex; flex-direction:column; gap: 15px;">
+                  <label class="toggle-label" style="display:flex; align-items:center; gap: 10px; cursor:pointer;">
+                    <input type="checkbox" id="autoplay-toggle" checked style="width: 18px; height: 18px;"> Autoplay next track in playlist
+                  </label>
+                  <label class="toggle-label" style="display:flex; align-items:center; gap: 10px; cursor:pointer;">
+                    <input type="checkbox" id="shuffle-toggle" style="width: 18px; height: 18px;"> Shuffle Queue
+                  </label>
+                  <label class="toggle-label" style="display:flex; align-items:center; gap: 10px; cursor:pointer;">
+                    <input type="checkbox" id="resume-enabled-toggle" checked style="width: 18px; height: 18px;"> Resume from last position
+                  </label>
+                  <label class="toggle-label" style="display:flex; align-items:center; gap: 10px; cursor:pointer;">
+                    <input type="checkbox" id="start-in-home-toggle" style="width: 18px; height: 18px;"> Always start on Home screen
+                  </label>
+                </div>
             </div>
             
           </div>
@@ -541,6 +547,7 @@
 
   </div>
   <script src="renderer.js"></script>
+  <script src="features.js"></script>
 </body>
 </html>
 
