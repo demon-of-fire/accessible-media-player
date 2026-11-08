@@ -2,18 +2,21 @@
    features.js — Extended features for Accessible Media Player
    Loaded AFTER renderer.js; shares its global (module-level) bindings.
    Implements: WMP-style home/recent screen, playlist power-tools, per-file
-   memory & stats, mouse-wheel controls, command palette, mini/focus/FPS/OSD,
-   colorblind filters, network URL play, multi-audio, enhanced bookmarks,
+   memory & stats, mouse-wheel controls, command palette, OSD,
+   network URL play, multi-audio, enhanced bookmarks,
    subtitle export, auto-save playlist, sleep-after-track, and IPC hooks.
    ========================================================================== */
 (function () {
   'use strict';
 
   const $ = (sel) => document.querySelector(sel);
+  const SVG_NS = 'http://www.w3.org/2000/svg';
   function ce(tag, props = {}, children = []) {
-    const el = document.createElement(tag);
+    // svg must be namespaced or the browser treats it as an unknown HTML tag and draws nothing
+    const el = tag === 'svg' ? document.createElementNS(SVG_NS, 'svg') : document.createElement(tag);
     for (const k in props) {
-      if (k === 'class') el.className = props[k];
+      if (props[k] === undefined) continue;
+      if (k === 'class') el.setAttribute('class', props[k]);
       else if (k === 'text') el.textContent = props[k];
       else if (k === 'html') el.innerHTML = props[k];
       else if (k.startsWith('on') && typeof props[k] === 'function') el.addEventListener(k.slice(2), props[k]);
@@ -57,11 +60,11 @@
     ]);
 
     const quick = ce('div', { class: 'hm-quick' });
-    const quickActions = [
+    const backAction = hasMedia() ? [{ label: 'Back to Player', icon: 'M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z', run: () => hideHome() }] : [];
+    const quickActions = [...backAction,
       { label: 'Open Files', icon: 'M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z', run: () => openFilesHandler() },
       { label: 'Open URL', icon: 'M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z', run: () => openUrlPrompt() },
       { label: 'Open Playlist', icon: 'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z', run: () => loadPlaylistBtn.click() },
-      { label: 'New Playlist', icon: 'M14 10H2v2h12v-2zm0-4H2v2h12V6zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM2 16h8v-2H2v2z', run: () => createPlaylistBtn.click() }
     ];
     quickActions.forEach(a => {
       const btn = ce('button', { class: 'hm-quick-btn', 'aria-label': a.label, onclick: a.run }, [
@@ -86,11 +89,14 @@
         const st = stats[normalizePath(path)] || {};
         const watched = st.watched || 0;
         const lastPos = st.lastPos || 0;
-        const tile = ce('button', { class: 'hm-tile', 'aria-label': `Play ${getFileName(path)}`, onclick: () => { loadMedia(path); hideHome(); } }, [
+        // Pick up where the listener stopped, unless they had basically finished it
+        const dur = loadState('durations', {})[normalizePath(path)];
+        const canResume = loadState('resumeEnabled', true) && lastPos > 5 && (!dur || lastPos < dur - 10);
+        const tile = ce('button', { class: 'hm-tile', 'aria-label': `Play ${getFileName(path)}${canResume ? `, resumes at ${formatTime(lastPos)}` : ''}`, onclick: () => { playPath(path, canResume ? lastPos : 0); hideHome(); } }, [
           ce('div', { class: 'hm-tile-icon', html: fileTypeIcon(path) }),
           ce('div', { class: 'hm-tile-meta' }, [
             ce('div', { class: 'hm-tile-name', text: getFileName(path), title: path }),
-            ce('div', { class: 'hm-tile-sub', text: watched > 0 ? `Watched ${formatHMS(watched)}` : 'Not played yet' })
+            ce('div', { class: 'hm-tile-sub', text: canResume ? `Resume at ${formatTime(lastPos)}` : (watched > 0 ? `Watched ${formatHMS(watched)}` : 'Not played yet') })
           ])
         ]);
         grid.appendChild(tile);
@@ -106,10 +112,11 @@
     const featSection = ce('div', { class: 'hm-section' });
     featSection.appendChild(ce('h2', { class: 'hm-section-title', text: 'Tips' }));
     featSection.appendChild(ce('ul', { class: 'hm-tips' }, [
-      ce('li', { text: 'Press Ctrl+Shift+P for the command palette.' }),
-      ce('li', { text: 'Scroll on the video to seek; Ctrl+scroll for volume; Shift+scroll for speed.' }),
-      ce('li', { text: 'Shift+B bookmarks the current moment. B opens bookmarks.' }),
-      ce('li', { text: 'Ctrl+G jumps to a specific time.' })
+      ce('li', { text: 'Press F1 or Ctrl+/ for every keyboard shortcut.' }),
+      ce('li', { text: 'Press Ctrl+Shift+P to search all commands.' }),
+      ce('li', { text: 'Ctrl+A says the current time. Ctrl+W says what is playing.' }),
+      ce('li', { text: 'Ctrl+Shift+B bookmarks the current moment. Ctrl+B opens bookmarks.' }),
+      ce('li', { text: 'Ctrl+D switches between surround, 8D and the other sound modes.' })
     ]));
     homeScreen.appendChild(featSection);
   }
@@ -123,7 +130,14 @@
   }
 
   function showHome() { renderHome(); homeScreen.classList.add('open'); homeScreen.setAttribute('aria-hidden', 'false'); }
-  function hideHome() { homeScreen.classList.remove('open'); homeScreen.setAttribute('aria-hidden', 'true'); }
+  function hideHome() {
+    if (homeScreen.contains(document.activeElement)) { // focus leaves before the screen is hidden
+      resetIdleTimer();
+      playBtn.focus();
+    }
+    homeScreen.classList.remove('open');
+    homeScreen.setAttribute('aria-hidden', 'true');
+  }
 
   // Hide home whenever real media starts; show via Home button / command palette.
   mediaPlayer.addEventListener('loadedmetadata', () => { if (mediaPlayer.src) hideHome(); });
@@ -135,38 +149,27 @@
   const topLeft = document.querySelector('.top-bar-left');
   if (topLeft) topLeft.appendChild(homeBtn);
 
-  window.addEventListener('keydown', (e) => {
-    if (e.ctrlKey && !e.shiftKey && e.altKey === false && e.key.toLowerCase() === 'h') { e.preventDefault(); showHome(); }
-  });
+
 
   /* -------------------------------------------- PER-FILE MEMORY & STATS -- */
-  const perFile = loadState('perFile', {});
   const stats = loadState('stats', {});
+  localStorage.removeItem('perFile'); // speed and volume are now global
+  // These records would otherwise grow forever; insertion order makes the first keys the oldest
+  const pruneRecord = (record, max) => { const keys = Object.keys(record); keys.slice(0, Math.max(0, keys.length - max)).forEach(k => delete record[k]); return record; };
+  pruneRecord(stats, 1000);
+  saveState('durations', pruneRecord(loadState('durations', {}), 2000));
   let lastTime = 0, statSaveAccum = 0;
+  // False while a new file loads, so its reset speed is not saved as the file's preference
+  let perFileReady = false;
 
-  function applyPerFile() {
-    if (!currentFilePath) return;
-    const key = normalizePath(currentFilePath);
-    const pf = perFile[key];
-    if (pf) {
-      if (typeof pf.speed === 'number') { mediaPlayer.playbackRate = pf.speed; }
-      if (typeof pf.volume === 'number') { mediaPlayer.volume = pf.volume; }
-      if (typeof pf.muted === 'boolean') { mediaPlayer.muted = pf.muted; }
-      updateSpeedUI();
-      updateVolumeUI();
-    }
-  }
-  function rememberPerFile() {
-    if (!currentFilePath) return;
-    const key = normalizePath(currentFilePath);
-    perFile[key] = { speed: mediaPlayer.playbackRate, volume: mediaPlayer.volume, muted: mediaPlayer.muted };
-    saveState('perFile', perFile);
-  }
-
-  mediaPlayer.addEventListener('loadedmetadata', applyPerFile);
-  mediaPlayer.addEventListener('play', rememberPerFile);
-  mediaPlayer.addEventListener('volumechange', () => { rememberPerFile(); });
-  mediaPlayer.addEventListener('ratechange', () => { rememberPerFile(); updateSpeedUI(); });
+  mediaPlayer.addEventListener('loadedmetadata', () => { perFileReady = true; });
+  mediaPlayer.addEventListener('volumechange', () => saveState('lastVolume', mediaPlayer.volume));
+  // The element resets to its default rate on every load, so the default follows the listener's choice
+  mediaPlayer.addEventListener('ratechange', () => {
+    if (silenceSkipIsActive()) return; // a temporary 4x must not become the listener's speed
+    if (perFileReady) mediaPlayer.defaultPlaybackRate = mediaPlayer.playbackRate;
+    updateSpeedUI();
+  });
 
   mediaPlayer.addEventListener('timeupdate', () => {
     const t = mediaPlayer.currentTime;
@@ -185,9 +188,12 @@
   window.addEventListener('beforeunload', () => saveState('stats', stats));
 
   /* -------------------------------------------------- MOUSE WHEEL CTRL -- */
+  let lastWheel = 0;
   videoWrapper.addEventListener('wheel', (e) => {
     if (!mediaPlayer.src || mediaPlayer.src.endsWith('index.html')) return;
     e.preventDefault();
+    if (performance.now() - lastWheel < 70) return; // touchpads send a flood of tiny scrolls
+    lastWheel = performance.now();
     const dir = e.deltaY < 0 ? 1 : -1;
     if (e.ctrlKey) {
       const v = Math.min(1, Math.max(0, mediaPlayer.volume + dir * 0.05));
@@ -221,7 +227,7 @@
 
   /* ------------------------------------------------- COMMAND PALETTE -- */
   const palette = ce('div', { id: 'cmd-palette', class: 'modal', 'aria-hidden': 'true', style: 'display:none;' });
-  const palInput = ce('input', { type: 'text', id: 'cmd-input', 'aria-label': 'Command search', placeholder: 'Type a command…' });
+  const palInput = ce('input', { type: 'text', id: 'cmd-input', role: 'combobox', 'aria-expanded': 'true', 'aria-autocomplete': 'list', 'aria-controls': 'cmd-list', 'aria-label': 'Command search', placeholder: 'Type a command…' });
   const palList = ce('ul', { id: 'cmd-list', role: 'listbox' });
   const palBox = ce('div', { class: 'modal-content', role: 'dialog', 'aria-label': 'Command Palette', style: 'min-width:460px; padding:0;' }, [
     ce('div', { style: 'padding:14px 16px; border-bottom:1px solid #333;' }, [palInput]),
@@ -239,7 +245,6 @@
     { name: 'Open Network URL', run: () => openUrlPrompt() },
     { name: 'Open Playlist', run: () => loadPlaylistBtn.click() },
     { name: 'Save Playlist', run: () => savePlaylistBtn.click() },
-    { name: 'New Playlist', run: () => createPlaylistBtn.click() },
     { name: 'Toggle Loop', run: () => loopBtn.click() },
     { name: 'Mute / Unmute', run: () => muteBtn.click() },
     { name: 'Volume Up', run: () => { volumeSlider.value = Math.min(100, +volumeSlider.value + 10); volumeSlider.dispatchEvent(new Event('input')); } },
@@ -251,15 +256,13 @@
     { name: 'Capture Frame', run: () => screenshotBtn.click() },
     { name: 'Go to Time', run: () => openGotoModal() },
     { name: 'Add Bookmark', run: () => addBookmarkAtCurrentTime() },
-    { name: 'Toggle Mini Mode', run: () => toggleMiniMode() },
-    { name: 'Toggle Focus Mode', run: () => toggleFocusMode() },
-    { name: 'Toggle FPS Overlay', run: () => toggleFps() },
+
     { name: 'Home Screen', run: () => showHome() },
-    { name: 'Toggle Shuffle', run: () => { if (shuffleToggle) { shuffleToggle.checked = !shuffleToggle.checked; showOSD(`Shuffle ${shuffleToggle.checked ? 'on' : 'off'}`); } } },
-    { name: 'Toggle Autoplay Next', run: () => { if (autoplayToggle) { autoplayToggle.checked = !autoplayToggle.checked; showOSD(`Autoplay ${autoplayToggle.checked ? 'on' : 'off'}`); } } },
+    { name: 'Toggle Shuffle', run: () => { if (shuffleToggle) { shuffleToggle.checked = !shuffleToggle.checked; shuffleToggle.dispatchEvent(new Event('change')); } } },
+    { name: 'Toggle Autoplay Next', run: () => { if (autoplayToggle) { autoplayToggle.checked = !autoplayToggle.checked; autoplayToggle.dispatchEvent(new Event('change')); showOSD(`Autoplay ${autoplayToggle.checked ? 'on' : 'off'}`); } } },
     { name: 'Load Subtitles', run: () => loadSubsBtn.click() },
     { name: 'Export Subtitles', run: () => exportSubtitles() },
-    { name: 'Toggle Echo Effect', run: () => { if (echoEffectToggle) { echoEffectToggle.checked = !echoEffectToggle.checked; echoEffectToggle.dispatchEvent(new Event('change')); } } },
+
     { name: 'Toggle High Contrast', run: () => { if (highContrastToggle) { highContrastToggle.checked = !highContrastToggle.checked; highContrastToggle.dispatchEvent(new Event('change')); } } },
     { name: 'Toggle Large Text', run: () => { if (largeTextToggle) { largeTextToggle.checked = !largeTextToggle.checked; largeTextToggle.dispatchEvent(new Event('change')); } } }
   ];
@@ -267,7 +270,7 @@
   function renderPalette(query) {
     palList.innerHTML = '';
     const q = (query || '').toLowerCase();
-    const filtered = COMMANDS.filter(c => c.name.toLowerCase().includes(q));
+    const filtered = COMMANDS.filter((c, i) => c.name.toLowerCase().includes(q) && COMMANDS.findIndex(o => o.name === c.name) === i);
     palIndex = Math.min(palIndex, Math.max(0, filtered.length - 1));
     if (filtered.length === 0) { palList.appendChild(ce('li', { class: 'cmd-empty', text: 'No commands found' })); return; }
     filtered.forEach((c, i) => {
@@ -275,7 +278,11 @@
       palList.appendChild(li);
     });
   }
-  function runPalette(c) { closePalette(); c.run(); }
+  function runPalette(c) {
+    closePalette();
+    if (window._lastModalPrevFocus) { window._lastModalPrevFocus.focus(); window._lastModalPrevFocus = null; }
+    c.run();
+  }
   function openPalette() {
     window._lastModalPrevFocus = document.activeElement;
     palette.style.display = 'flex'; palette.setAttribute('aria-hidden', 'false');
@@ -290,102 +297,15 @@
     else if (e.key === 'Enter') { e.preventDefault(); if (items[palIndex]) runPalette(COMMANDS.find(c => c.name === items[palIndex].textContent)); }
     else if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
   });
-  window.addEventListener('keydown', (e) => {
-    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); openPalette(); }
-  }, true);
+
 
   /* ------------------------------------------- MINI / FOCUS / FPS MODES -- */
-  let miniMode = false, focusMode = false, fpsOn = false;
-  function toggleMiniMode() {
-    miniMode = !miniMode;
-    ipcRenderer.send('set-mini', miniMode);
-    showOSD(miniMode ? 'Mini mode on' : 'Mini mode off');
-  }
-  function toggleFocusMode() {
-    focusMode = !focusMode;
-    document.body.classList.toggle('focus-mode', focusMode);
-    showOSD(focusMode ? 'Focus mode on' : 'Focus mode off');
-  }
-  const fpsEl = ce('div', { id: 'fps-overlay', 'aria-hidden': 'true' });
-  document.body.appendChild(fpsEl);
-  let fpsFrames = 0, fpsLast = performance.now();
-  function toggleFps() {
-    fpsOn = !fpsOn;
-    fpsEl.style.display = fpsOn ? 'block' : 'none';
-    showOSD(fpsOn ? 'FPS overlay on' : 'FPS overlay off');
-  }
-  function fpsLoop() {
-    fpsFrames++;
-    const now = performance.now();
-    if (now - fpsLast >= 1000) {
-      if (fpsOn) fpsEl.textContent = `${fpsFrames} fps` + (mediaPlayer.videoWidth ? `  •  ${mediaPlayer.videoWidth}×${mediaPlayer.videoHeight}` : '');
-      fpsFrames = 0; fpsLast = now;
-    }
-    requestAnimationFrame(fpsLoop);
-  }
-  fpsLoop();
-
-  /* ------------------------------------------------- COLORBLIND FILTER -- */
-  const colorblindSelect = ce('select', { id: 'colorblind-select', 'aria-label': 'Color Blindness Filter', style: 'background:#333;color:#fff;border:1px solid #444;padding:5px;border-radius:4px;font-size:0.85rem;' }, [
-    ce('option', { value: 'none', text: 'None' }),
-    ce('option', { value: 'protanopia', text: 'Protanopia' }),
-    ce('option', { value: 'deuteranopia', text: 'Deuteranopia' }),
-    ce('option', { value: 'tritanopia', text: 'Tritanopia' }),
-    ce('option', { value: 'grayscale', text: 'Grayscale' })
-  ]);
-  const cbWrap = ce('div', { style: 'display:flex;flex-direction:column;gap:4px;margin-top:10px;' }, [
-    ce('span', { style: 'font-size:0.85rem;color:#ccc;', text: 'Color Blindness Filter:' }),
-    colorblindSelect
-  ]);
-  const accessSettings = document.getElementById('access-settings');
-  if (accessSettings) accessSettings.appendChild(cbWrap);
-
-  const CB_FILTERS = {
-    none: '',
-    protanopia: 'url(#cb-protan)',
-    deuteranopia: 'url(#cb-deuter)',
-    tritanopia: 'url(#cb-tritan)',
-    grayscale: 'grayscale(1)'
-  };
-  let cbFilter = '';
-  // SVG filters for color blindness simulation
-  const svgDefs = ce('svg', { style: 'position:absolute;width:0;height:0;', 'aria-hidden': 'true', html: `
-    <defs>
-      <filter id="cb-protan"><feColorMatrix type="matrix" values="0.567,0.433,0,0,0 0.558,0.442,0,0,0 0,0.242,0.758,0,0 0,0,0,1,0"/></filter>
-      <filter id="cb-deuter"><feColorMatrix type="matrix" values="0.625,0.375,0,0,0 0.7,0.3,0,0,0 0,0.3,0.7,0,0 0,0,0,1,0"/></filter>
-      <filter id="cb-tritan"><feColorMatrix type="matrix" values="0.95,0.05,0,0,0 0,0.433,0.567,0,0 0,0.475,0.525,0,0 0,0,0,1,0"/></filter>
-    </defs>` });
-  document.body.appendChild(svgDefs);
-
-  colorblindSelect.addEventListener('change', () => {
-    cbFilter = CB_FILTERS[colorblindSelect.value] || '';
-    applyVideoFilterExtensions();
-    showOSD(`Color filter: ${colorblindSelect.value}`);
-  });
-  // Patch updateVideoFilters to include colorblind filter (reassign the renderer binding)
-  const _origUpdateVideoFilters = updateVideoFilters;
-  updateVideoFilters = function () {
-    _origUpdateVideoFilters();
-    applyVideoFilterExtensions();
-  };
-  // The video-filter sliders captured the ORIGINAL function when binding their
-  // 'input' listeners, so re-apply the colorblind filter after they run.
-  if (typeof videoFilters !== 'undefined' && videoFilters) {
-    videoFilters.forEach(s => s.addEventListener('input', applyVideoFilterExtensions));
-  }
-  function applyVideoFilterExtensions() {
-    if (!cbFilter) return;
-    const existing = mediaPlayer.style.filter || '';
-    // strip any url(#cb-*) tokens then re-add
-    const cleaned = existing.replace(/\s*url\(#cb-[a-z]+\)/g, '').trim();
-    mediaPlayer.style.filter = (cleaned + ' ' + cbFilter).trim();
-  }
-
   /* ------------------------------------------------- NETWORK URL PLAY -- */
   const urlModal = ce('div', { id: 'url-modal', class: 'modal', 'aria-hidden': 'true', style: 'display:none;' });
-  const urlInput = ce('input', { type: 'text', id: 'url-input', placeholder: 'https://… or file path', style: 'padding:10px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;font-size:1rem;width:100%;' });
+  const urlInput = ce('input', { type: 'text', id: 'url-input', 'aria-label': 'Web address or file path', placeholder: 'https://… or file path', style: 'padding:10px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;font-size:1rem;width:100%;' });
   urlModal.appendChild(ce('div', { class: 'modal-content', role: 'dialog', 'aria-label': 'Open URL', style: 'min-width:420px;padding:20px;' }, [
     ce('h3', { style: 'margin-top:0;', text: 'Open Network URL or Path' }),
+    ce('p', { style: 'margin:0 0 12px;font-size:0.85rem;color:#bbb;max-width:420px;', text: 'Needs a direct link to a media file, such as one ending in .mp3 or .mp4, or a radio stream. Web pages like YouTube cannot be played.' }),
     ce('div', { style: 'display:flex;flex-direction:column;gap:12px;' }, [
       urlInput,
       ce('div', { style: 'display:flex;justify-content:flex-end;gap:10px;' }, [
@@ -402,32 +322,21 @@
   }
   function closeUrl() { urlModal.style.display = 'none'; urlModal.setAttribute('aria-hidden', 'true'); if (_lastModalPrevFocus) { window._lastModalPrevFocus.focus(); window._lastModalPrevFocus = null; } }
   function submitUrl() {
-    const v = urlInput.value.trim();
+    const v = urlInput.value.trim().replace(/^"(.*)"$/, '$1'); // Explorer's "Copy as path" adds quotes
     if (!v) return;
-    let src = v;
-    if (!/^https?:\/\//.test(v) && !v.startsWith('file://') && !v.startsWith('blob:') && !v.startsWith('data:')) {
-      src = `file:///${v.replace(/\\/g, '/')}`;
-    }
-    addToPlaylist(src);
-    currentPlaylistIndex = playlist.length - 1;
-    loadMedia(src);
-    renderPlaylist();
     closeUrl();
+    hideHome();
+    playPath(v);
   }
   urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitUrl(); if (e.key === 'Escape') closeUrl(); });
 
   // Paste a URL from clipboard
   window.addEventListener('paste', (e) => {
     const text = (e.clipboardData || window.clipboardData).getData('text');
-    if (text && /^https?:\/\/\S+$/.test(text.trim()) && !mediaPlayer.src) {
-      submitUrlText(text.trim());
+    if (text && /^https?:\/\/\S+$/.test(text.trim()) && !isTypingTarget(document.activeElement) && !isModalOpen()) {
+      playPath(text.trim());
     }
   });
-  function submitUrlText(v) {
-    let src = v;
-    if (!/^https?:\/\//.test(v)) src = `file:///${v.replace(/\\/g, '/')}`;
-    addToPlaylist(src); currentPlaylistIndex = playlist.length - 1; loadMedia(src); renderPlaylist();
-  }
 
   /* ------------------------------------------------- MULTI-AUDIO TRACK -- */
   const audioTrackSelect = ce('select', { id: 'audio-track-select', 'aria-label': 'Audio Track', style: 'background:#333;color:#fff;border:1px solid #444;padding:4px;border-radius:4px;font-size:0.8rem;' });
@@ -466,7 +375,7 @@
     bookmarksSidebarList.innerHTML = '';
     const bookmarks = getBookmarks();
     if (bookmarks.length === 0) {
-      bookmarksSidebarList.innerHTML = '<li style="padding: 15px; color: #888; text-align: center; font-size: 0.9rem;">No bookmarks yet. Press Shift+B or use the button above to add one.</li>';
+      bookmarksSidebarList.innerHTML = '<li style="padding: 15px; color: #888; text-align: center; font-size: 0.9rem;">No bookmarks yet. Press Ctrl+Shift+B or use the button above to add one.</li>';
       return;
     }
     bookmarks.forEach((bm, i) => {
@@ -476,18 +385,20 @@
       const titleInput = ce('input', { class: 'bookmark-title-input', type: 'text', value: bm.label || '', 'aria-label': 'Bookmark label' });
       titleInput.addEventListener('change', (e) => {
         const current = getBookmarks();
-        if (current[i]) { current[i].label = e.target.value.trim() || `Bookmark at ${formatTime(bm.time)}`; saveBookmarks(current); announce('Bookmark renamed'); }
+        if (current[i]) {
+          current[i].label = e.target.value.trim() || `Bookmark at ${formatTime(bm.time)}`;
+          saveBookmarks(current);
+          jumpBtn.setAttribute('aria-label', `Jump to ${current[i].label}`);
+          delBtn.setAttribute('aria-label', `Delete ${current[i].label}`);
+          announce('Bookmark renamed');
+        }
       });
 
       const timeBadge = ce('span', { class: 'bookmark-time-badge', text: formatTime(bm.time), title: `Jump to ${formatTime(bm.time)}`, onclick: () => { mediaPlayer.currentTime = bm.time; announce(`Jumped to ${formatTime(bm.time)}`); } });
 
-      const thumb = bm.thumb
-        ? ce('img', { class: 'bookmark-thumb', src: bm.thumb, alt: '' })
-        : ce('div', { class: 'bookmark-thumb bookmark-thumb-empty', text: '★' });
-
       const note = ce('textarea', { class: 'bookmark-note', placeholder: 'Add a note…', 'aria-label': 'Bookmark note' });
       note.value = bm.note || '';
-      note.addEventListener('change', (e) => {
+      note.addEventListener('input', (e) => { // saved as typed, so closing the app cannot lose it
         const current = getBookmarks();
         if (current[i]) { current[i].note = e.target.value; saveBookmarks(current); }
       });
@@ -498,7 +409,7 @@
       actions.appendChild(jumpBtn); actions.appendChild(delBtn);
 
       row.appendChild(titleInput); row.appendChild(timeBadge);
-      li.appendChild(thumb);
+
       li.appendChild(row);
       li.appendChild(note);
       li.appendChild(actions);
@@ -512,34 +423,25 @@
     if (!currentFilePath || isNaN(mediaPlayer.currentTime)) { announce('No media loaded to bookmark'); return; }
     const bookmarks = getBookmarks();
     const time = mediaPlayer.currentTime;
-    let thumb = null;
-    try {
-      if (!isAudioFile(currentFilePath) && mediaPlayer.videoWidth) {
-        const c = document.createElement('canvas');
-        c.width = 160; c.height = Math.round(160 * (mediaPlayer.videoHeight / mediaPlayer.videoWidth)) || 90;
-        c.getContext('2d').drawImage(mediaPlayer, 0, 0, c.width, c.height);
-        thumb = c.toDataURL('image/jpeg', 0.6);
-      }
-    } catch (e) { thumb = null; }
     const label = `Bookmark at ${formatTime(time)}`;
-    bookmarks.push({ time, label, note: '', thumb });
+    bookmarks.push({ time, label, note: '' });
     bookmarks.sort((a, b) => a.time - b.time);
     saveBookmarks(bookmarks);
     renderBookmarks();
     announce(`Bookmark added at ${formatTime(time)}`);
+    if (window.ampCue) window.ampCue('bookmark');
   };
 
   /* ----------------------------------------------- PLAYLIST POWER-TOOLS -- */
   // Inject search box + duration + dedupe into playlist sidebar
   const playlistSearch = ce('input', { type: 'text', id: 'playlist-search', placeholder: 'Search queue…', 'aria-label': 'Search queue', style: 'width:100%;padding:8px;margin:8px 0;background:#222;color:#fff;border:1px solid #333;border-radius:4px;box-sizing:border-box;' });
   const playlistMeta = ce('div', { id: 'playlist-meta', style: 'font-size:0.8rem;color:#aaa;padding:0 15px 8px;display:flex;justify-content:space-between;' });
-  const dedupeBtn = ce('button', { class: 'action-btn-small', text: 'Remove Duplicates', 'aria-label': 'Remove duplicate tracks', onclick: dedupePlaylist });
-  const metaBar = ce('div', { style: 'padding:0 15px 8px;' }, [dedupeBtn]);
+
   const playlistHeader = document.querySelector('#playlist-sidebar .playlist-header');
   if (playlistHeader) {
     playlistHeader.insertAdjacentElement('afterend', playlistSearch);
     playlistHeader.insertAdjacentElement('afterend', playlistMeta);
-    playlistHeader.insertAdjacentElement('afterend', metaBar);
+
   }
 
   let playlistFilter = '';
@@ -556,18 +458,6 @@
     const shown = playlist.filter(p => getFileName(p).toLowerCase().includes(playlistFilter)).length;
     const { total, known } = playlistDuration();
     playlistMeta.innerHTML = `<span>${shown} / ${playlist.length} tracks</span><span>${known ? '~' + formatHMS(total) : ''}</span>`;
-  }
-
-  function dedupePlaylist() {
-    const seen = new Set(); let removed = 0;
-    for (let i = playlist.length - 1; i >= 0; i--) {
-      const k = normalizePath(playlist[i]);
-      if (seen.has(k)) { playlist.splice(i, 1); if (currentPlaylistIndex > i) currentPlaylistIndex--; removed++; }
-      else seen.add(k);
-    }
-    if (currentPlaylistIndex >= playlist.length) currentPlaylistIndex = playlist.length - 1;
-    renderPlaylist();
-    announce(removed ? `Removed ${removed} duplicate track(s)` : 'No duplicates found');
   }
 
   // Drag-reorder + play-next + undo, by reassigning renderPlaylist
@@ -589,8 +479,8 @@
       li.addEventListener('dragleave', () => { li.style.borderTop = ''; });
       li.addEventListener('drop', (e) => {
         e.preventDefault(); li.style.borderTop = '';
-        const from = parseInt(e.dataTransfer.getData('text/plain'));
-        reorderPlaylist(from, idx);
+        const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
+        if (Number.isInteger(from)) reorderPlaylist(from, idx);
       });
       // Shift+Enter = play next
       li.addEventListener('keydown', (e) => {
@@ -603,48 +493,65 @@
   };
 
   function reorderPlaylist(from, to) {
-    if (from === to || from < 0 || to < 0) return;
+    if (from === to || from < 0 || to < 0 || to >= playlist.length) return;
     const [moved] = playlist.splice(from, 1);
     playlist.splice(to, 0, moved);
     if (currentPlaylistIndex === from) currentPlaylistIndex = to;
     else if (from < currentPlaylistIndex && to >= currentPlaylistIndex) currentPlaylistIndex--;
     else if (from > currentPlaylistIndex && to <= currentPlaylistIndex) currentPlaylistIndex++;
+    pendingPlaylistFocus = to;
     renderPlaylist();
-    announce('Playlist reordered');
+    announce(`Moved to position ${to + 1}`);
   }
 
   function playNextAfter(idx) {
     if (idx < 0 || idx >= playlist.length) return;
+    if (idx === currentPlaylistIndex) return;
     const [item] = playlist.splice(idx, 1);
-    const insertAt = currentPlaylistIndex + 1;
-    playlist.splice(insertAt, 0, item);
     if (idx < currentPlaylistIndex) currentPlaylistIndex--;
+    playlist.splice(currentPlaylistIndex + 1, 0, item);
     renderPlaylist();
     announce('Queued to play next');
   }
 
-  function showPlaylistMenu(e, idx) {
-    removePlaylistMenu();
-    const menu = ce('div', { class: 'ctx-menu', style: `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:300;` });
-    const actions = [
-      { label: 'Play Now', run: () => playPlaylistItem(idx) },
-      { label: 'Play Next', run: () => playNextAfter(idx) },
-      { label: 'Remove', run: () => { lastRemoved = { item: playlist[idx], index: idx }; playlist.splice(idx, 1); if (currentPlaylistIndex > idx) currentPlaylistIndex--; renderPlaylist(); showUndo(); } },
-      { label: 'Copy Path', run: () => { navigator.clipboard && navigator.clipboard.writeText(playlist[idx]); announce('Path copied'); } }
-    ];
-    actions.forEach(a => menu.appendChild(ce('button', { class: 'ctx-item', text: a.label, onclick: () => { a.run(); removePlaylistMenu(); } })));
-    document.body.appendChild(menu);
-    setTimeout(() => window.addEventListener('click', removePlaylistMenu, { once: true }), 0);
+  function removeQueueItem(idx) {
+    lastRemoved = { item: playlist[idx], index: idx, wasCurrent: idx === currentPlaylistIndex };
+    playlist.splice(idx, 1);
+    // Removing the playing track: "next" should now be whatever slid into its place
+    if (currentPlaylistIndex >= idx) currentPlaylistIndex--;
+    renderPlaylist();
+    showUndo();
+    announce(`Removed ${getFileName(lastRemoved.item)}. Press Control Z to undo.`);
   }
+  let lastClearedQueue = null;
+  clearPlaylistBtn.addEventListener('click', () => {
+    if (playlist.length) lastClearedQueue = { items: playlist.slice(), index: currentPlaylistIndex };
+  }, true);
+  function undoRemove() {
+    if (lastClearedQueue && !playlist.length) {
+      playlist = lastClearedQueue.items;
+      currentPlaylistIndex = lastClearedQueue.index;
+      lastClearedQueue = null;
+      renderPlaylist();
+      announce(`Queue restored, ${playlist.length} tracks`);
+      return;
+    }
+    if (!lastRemoved) return;
+    playlist.splice(lastRemoved.index, 0, lastRemoved.item);
+    if (currentPlaylistIndex >= lastRemoved.index - (lastRemoved.wasCurrent ? 1 : 0)) currentPlaylistIndex++;
+    pendingPlaylistFocus = playlistItems.contains(document.activeElement) ? lastRemoved.index : null;
+    renderPlaylist();
+    announce(`Restored ${getFileName(lastRemoved.item)}`);
+    lastRemoved = null;
+    document.querySelectorAll('.undo-bar').forEach(b => b.remove());
+  }
+
   function removePlaylistMenu() { document.querySelectorAll('.ctx-menu').forEach(m => m.remove()); }
 
   function showUndo() {
     const bar = ce('div', { class: 'undo-bar' }, [
       ce('span', { text: 'Track removed' }),
-      ce('button', { class: 'action-btn-small', text: 'Undo', onclick: () => {
-        if (lastRemoved) { playlist.splice(lastRemoved.index, 0, lastRemoved.item); if (currentPlaylistIndex >= lastRemoved.index) currentPlaylistIndex++; renderPlaylist(); lastRemoved = null; }
-        bar.remove();
-      } })
+      ce('button', { class: 'action-btn-small', text: 'Undo', onclick: undoRemove })
     ]);
     document.body.appendChild(bar);
     setTimeout(() => { if (bar.parentNode) bar.remove(); }, 6000);
@@ -661,31 +568,32 @@
   });
 
   /* ---------------------------------------------- AUTO-SAVE PLAYLIST -- */
-  const _origRender2 = renderPlaylist;
-  // wrap once more for autosave (combine with above by saving inside renderPlaylist meta update)
+  // Restore before the first save below, so a resumed clip cannot overwrite the queue
+  (function restoreQueue() {
+    const auto = loadState('autoplaylist', null);
+    if (!Array.isArray(auto)) return;
+    const saved = auto.filter(p => typeof p === 'string' && p);
+    if (!saved.length) return;
+    const active = currentFilePath ? normalizePath(currentFilePath) : null;
+    if (active && !saved.some(p => normalizePath(p) === active)) saved.unshift(currentFilePath);
+    playlist = saved;
+    currentPlaylistIndex = active ? playlist.findIndex(p => normalizePath(p) === active) : -1;
+  })();
   const _renderWithSave = renderPlaylist;
   renderPlaylist = function () { _renderWithSave(); saveState('autoplaylist', playlist); };
-  // Restore autosaved playlist on launch (after renderer IIFE has run)
-  setTimeout(() => {
-    const auto = loadState('autoplaylist', null);
-    if (auto && Array.isArray(auto) && auto.length && currentPlaylistIndex === -1 && !mediaPlayer.src) {
-      playlist = auto.slice();
-      renderPlaylist();
-    }
-  }, 50);
+  renderPlaylist();
 
   /* ------------------------------------------------- SUBTITLE EXPORT -- */
   function exportSubtitles() {
     if (!subtitleFileText) { announce('No subtitle loaded to export'); return; }
     const isSrt = /\.(srt)$/i.test(currentSubtitleName || '');
-    let out = subtitleFileText;
-    if (!isSrt) {
-      // convert VTT -> SRT
-      out = subtitleFileText
-        .replace(/WEBVTT\s*/, '')
-        .replace(/(\d{2}:\d{2}:\d{2})\.(\d{3})/g, '$1,$2')
-        .replace(/\n\n+/g, '\n\n');
-    }
+    let cues = parseSubtitles(subtitleFileText, isSrt);
+    if (!cues.length) cues = parseSubtitles(subtitleFileText, !isSrt);
+    // Rebuilt from cues: numbered, comma timestamps, and including any sync offset
+    const out = cues.map((c, i) => {
+      const stamp = (t) => fmtVtt(Math.max(0, t + subtitleOffset)).replace('.', ',');
+      return `${i + 1}\n${stamp(c.start)} --> ${stamp(c.end)}\n${c.text}\n`;
+    }).join('\n');
     ipcRenderer.invoke('save-subs', { name: (currentSubtitleName || 'subtitles').replace(/\.(vtt|srt)$/i, '') + '.srt', text: out })
       .then(ok => announce(ok ? 'Subtitles exported' : 'Export cancelled'));
   }
@@ -700,11 +608,12 @@
   let sleepStopAtEnd = false;
   sleepEndCheck.querySelector('input').addEventListener('change', (e) => {
     sleepStopAtEnd = e.target.checked;
-    if (sleepStopAtEnd) { sleepTimerSelect.value = 'off'; if (sleepInterval) { clearInterval(sleepInterval); sleepCountdown.style.display = 'none'; } announce('Will stop at end of track'); }
+    stopAfterCurrentTrack = sleepStopAtEnd;
+    if (sleepStopAtEnd) { sleepTimerSelect.value = 'off'; sleepTimerSelect.dispatchEvent(new Event('change')); announce('Will stop at end of track'); }
     else announce('Sleep-at-end disabled');
   });
   mediaPlayer.addEventListener('ended', () => {
-    if (sleepStopAtEnd && !isLooping) { mediaPlayer.pause(); sleepStopAtEnd = false; sleepEndCheck.querySelector('input').checked = false; announce('Stopped at end of track (sleep timer)'); }
+    if (sleepStopAtEnd && !isLooping) { stopAfterCurrentTrack = false; sleepStopAtEnd = false; sleepEndCheck.querySelector('input').checked = false; announce('Stopped at end of track (sleep timer)'); }
   });
 
   /* ------------------------------------------------- IPC LISTENERS -- */
@@ -725,15 +634,15 @@
     }
     loadMedia(playlist[currentPlaylistIndex]);
     renderPlaylist();
+    hideHome();
   });
-  ipcRenderer.on('watch-folder-file', (e, path) => { addToPlaylist(path); announce(`Added from watched folder: ${getFileName(path)}`); });
   ipcRenderer.on('request-home', () => showHome());
   ipcRenderer.on('request-url', () => openUrlPrompt());
   ipcRenderer.on('request-palette', () => openPalette());
 
   // Notification on track change
   mediaPlayer.addEventListener('loadedmetadata', () => {
-    if (currentFilePath) {
+    if (currentFilePath && loadState('setting:notify-toggle', false)) {
       ipcRenderer.send('show-notification', {
         title: 'Now Playing',
         body: getFileName(currentFilePath)
@@ -749,9 +658,11 @@
   const politeRegion = ce('div', { id: 'polite-region', class: 'sr-only', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' });
   document.body.appendChild(politeRegion);
   const _assertiveRegion = liveRegion;
-  announce = function (message) {
-    const critical = message.includes('Playing') || message.includes('Paused') ||
-      message.includes('Loaded') || message.includes('Stopped') || message.includes('Now Playing');
+  let bootSilent = true; // restoring saved settings must not talk over launch
+  announce = function (message, forceCritical) {
+    if (bootSilent) return;
+    const critical = forceCritical || message.includes('Playing') || message.includes('Paused') ||
+      message.includes('Loaded') || message.includes('Stopped');
     if (!verboseAnnounceToggle || !verboseAnnounceToggle.checked) {
       if (!critical) return;
     }
@@ -763,7 +674,8 @@
   window._lastModalPrevFocus = null;
   /* ---- Generic focus trap for modals ---- */
   function enableModalA11y(modalEl, inputEl, hideFn) {
-    modalEl.setAttribute('aria-modal', 'true');
+    const dialog = modalEl.querySelector('[role="dialog"]');
+    if (dialog) dialog.setAttribute('aria-modal', 'true');
     modalEl.addEventListener('keydown', (e) => {
       if (modalEl.style.display === 'none') return;
       if (e.key === 'Escape') { e.preventDefault(); hideFn(); if (_lastModalPrevFocus) { window._lastModalPrevFocus.focus(); window._lastModalPrevFocus = null; } return; }
@@ -792,7 +704,7 @@
     items.forEach((li, i) => {
       li.setAttribute('role', 'option');
       li.id = 'cmd-opt-' + i;
-      if (i === palIndex) { li.setAttribute('aria-selected', 'true'); palInput.setAttribute('aria-activedescendant', li.id); }
+      if (i === palIndex) { li.setAttribute('aria-selected', 'true'); palInput.setAttribute('aria-activedescendant', li.id); li.scrollIntoView({ block: 'nearest' }); }
       else li.removeAttribute('aria-selected');
     });
   };
@@ -808,7 +720,7 @@
   };
   homeScreen.setAttribute('role', 'region');
   homeScreen.setAttribute('aria-label', 'Home and recent media');
-  homeScreen.setAttribute('aria-modal', 'true');
+
   homeScreen.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { e.preventDefault(); hideHome(); if (homePrevFocus) homePrevFocus.focus(); homePrevFocus = null; }
     if (e.key === 'Tab') {
@@ -823,7 +735,7 @@
   // Landmark roles for screen-reader navigation
   videoWrapper.setAttribute('role', 'main');
   videoWrapper.setAttribute('aria-label', 'Video and playback area');
-  const topBarEl = document.querySelector('.top-bar');
+  const topBarEl = document.getElementById('top-bar');
   if (topBarEl) {
     topBarEl.setAttribute('role', 'navigation');
     topBarEl.setAttribute('aria-label', 'Top toolbar');
@@ -831,23 +743,24 @@
   [playlistSidebar, bookmarksSidebar, moreOpts].forEach(s => { if (s) { s.setAttribute('role', 'region'); } });
 
   // Skip link for keyboard / SR users
-  const skipLink = ce('a', { href: '#controls-overlay', id: 'skip-link', class: 'sr-only', text: 'Skip to playback controls',
+  const skipLink = ce('a', { href: '#controls-overlay', id: 'skip-link', class: 'sr-only skip-link', text: 'Skip to playback controls',
     onclick: (e) => { e.preventDefault(); controlsOverlay.setAttribute('tabindex', '-1'); controlsOverlay.focus(); } });
   document.getElementById('app-container').insertBefore(skipLink, document.getElementById('app-container').firstChild);
 
   /* ---- Accessible context menu (was a plain div) ---- */
-  showPlaylistMenu = function (e, idx) {
+  function showPlaylistMenu(e, idx) {
     removePlaylistMenu();
     const menu = ce('div', { class: 'ctx-menu', role: 'menu', 'aria-label': 'Playlist item actions',
-      style: `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:300;` });
+      style: `position:fixed;left:${Math.min(e.clientX, window.innerWidth - 190)}px;top:${Math.min(e.clientY, window.innerHeight - 200)}px;z-index:300;` });
     const actions = [
       { label: 'Play Now', run: () => playPlaylistItem(idx) },
       { label: 'Play Next', run: () => playNextAfter(idx) },
-      { label: 'Remove', run: () => { lastRemoved = { item: playlist[idx], index: idx }; playlist.splice(idx, 1); if (currentPlaylistIndex > idx) currentPlaylistIndex--; renderPlaylist(); showUndo(); } },
-      { label: 'Copy Path', run: () => { navigator.clipboard && navigator.clipboard.writeText(playlist[idx]); announce('Path copied'); } }
+      { label: 'Remove', run: () => { pendingPlaylistFocus = idx; removeQueueItem(idx); } },
+      { label: 'Copy Path', run: () => { navigator.clipboard && navigator.clipboard.writeText(playlist[idx]); announce('Path copied'); } },
+      ...(isUrl(playlist[idx]) ? [] : [{ label: 'Show in File Explorer', run: () => ipcRenderer.send('reveal-file', playlist[idx]) }])
     ];
     const buttons = actions.map(a => ce('button', { class: 'ctx-item', role: 'menuitem', text: a.label,
-      onclick: () => { a.run(); removePlaylistMenu(); if (prevMenuFocus) prevMenuFocus.focus(); } }));
+      onclick: () => { a.run(); removePlaylistMenu(); if (prevMenuFocus && prevMenuFocus.isConnected) prevMenuFocus.focus(); } }));
     buttons.forEach(b => menu.appendChild(b));
     document.body.appendChild(menu);
     const prevMenuFocus = document.activeElement;
@@ -858,7 +771,7 @@
       else if (ev.key === 'ArrowUp') { ev.preventDefault(); const i = buttons.indexOf(document.activeElement); buttons[(i - 1 + buttons.length) % buttons.length].focus(); }
     });
     setTimeout(() => window.addEventListener('click', (ev) => { if (!menu.contains(ev.target)) removePlaylistMenu(); }, { once: true }), 0);
-  };
+  }
 
   /* ---- Keyboard playlist reorder (Ctrl+Arrow on a focused item) ---- */
   // Patch into the existing renderPlaylist DnD handler
@@ -868,6 +781,21 @@
     const items = playlistItems.querySelectorAll('.playlist-item');
     items.forEach((li, idx) => {
       li.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Delete') {
+          ev.preventDefault();
+          pendingPlaylistFocus = idx;
+          removeQueueItem(idx);
+          return;
+        }
+        // Arrows walk the queue, so a long list is not one Tab stop per track
+        if (!ev.ctrlKey && !ev.shiftKey && ['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(ev.key)) {
+          ev.preventDefault();
+          const visible = Array.from(playlistItems.querySelectorAll('.playlist-item')).filter(x => x.style.display !== 'none');
+          const at = visible.indexOf(li);
+          const target = { ArrowUp: visible[at - 1], ArrowDown: visible[at + 1], Home: visible[0], End: visible[visible.length - 1] }[ev.key];
+          if (target) target.focus();
+          return;
+        }
         if (ev.ctrlKey && (ev.key === 'ArrowUp' || ev.key === 'ArrowDown')) {
           ev.preventDefault();
           reorderPlaylist(idx, ev.key === 'ArrowUp' ? idx - 1 : idx + 1);
@@ -877,7 +805,7 @@
   };
 
   /* ---- Quick Toggles panel (proper aria-pressed buttons) ---- */
-  let alwaysOnTop = false, normalizationOn = false, videoRotation = 0, flipH = false, flipV = false, videoZoom = 1;
+  let alwaysOnTop = false, normalizationOn = false;
   function subsVisible() { return mediaPlayer.textTracks && mediaPlayer.textTracks.length > 0 && mediaPlayer.textTracks[0].mode === 'showing'; }
   const moScroll = document.querySelector('#more-options-sidebar div[style*="flex: 1; overflow-y: auto"]');
   const togglesPanel = ce('div', { class: 'mo-section', style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:8px;border:1px solid #333;' }, [
@@ -894,48 +822,151 @@
   mkToggle('Repeat', () => repeatMode !== 'off', () => setRepeatMode(repeatMode === 'off' ? 'one' : repeatMode === 'one' ? 'all' : 'off'));
   mkToggle('Shuffle', () => shuffleToggle && shuffleToggle.checked, () => { shuffleToggle.checked = !shuffleToggle.checked; shuffleToggle.dispatchEvent(new Event('change')); });
   mkToggle('Autoplay Next', () => autoplayToggle && autoplayToggle.checked, () => { autoplayToggle.checked = !autoplayToggle.checked; autoplayToggle.dispatchEvent(new Event('change')); });
-  mkToggle('Mini Mode', () => miniMode, () => toggleMiniMode());
-  mkToggle('Focus Mode', () => focusMode, () => toggleFocusMode());
-  mkToggle('FPS Overlay', () => fpsOn, () => toggleFps());
+
   mkToggle('Always on Top', () => alwaysOnTop, () => { alwaysOnTop = !alwaysOnTop; ipcRenderer.send('set-always-on-top', alwaysOnTop); });
-  mkToggle('Audio Normalization', () => normalizationOn, () => { normalizationOn = !normalizationOn; setNormalization(normalizationOn); });
+
   mkToggle('Subtitles', () => subsVisible(), () => toggleSubtitles());
   // Append toggles AFTER static content so they appear at the top of the dynamic area
   if (moScroll) moScroll.appendChild(togglesPanel);
-  // Visualizer, Spatial, Customize & Clear History — appended inside togglesPanel
-  (function addExtraToggles() {
-    let _visOn = loadState('visualizerOn', true);
-    window._setVisualizer = function (on) {
-      _visOn = on; saveState('visualizerOn', on);
-      if (on && isAudioFile(currentFilePath)) { audioVisualizer.style.display = 'flex'; audioVisualizer.setAttribute('aria-hidden', 'false'); startVisualizerLoop(); }
-      else { audioVisualizer.style.display = 'none'; audioVisualizer.setAttribute('aria-hidden', 'true'); stopVisualizerLoop(); }
-    };
-    mkToggle('Visualizer', () => _visOn, () => window._setVisualizer(!_visOn));
-    mkToggle('Spatial Audio', () => document.getElementById('spatial-toggle')?.checked, () => { const cb = document.getElementById('spatial-toggle'); if (cb) { cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); } });
-    togglesPanel.appendChild(ce('button', { class: 'action-btn-small', text: 'Clear History', style: 'font-size:0.78rem;', onclick: clearHistory }));
-    togglesPanel.appendChild(ce('button', { class: 'action-btn-small', text: 'Customize Visualizer', style: 'margin-top:4px;font-size:0.78rem;', onclick: () => { const vs = document.getElementById('vis-color'); if (vs) vs.closest?.('[style*="background:#252525"]')?.scrollIntoView?.({ behavior: 'smooth', block: 'center' }) || vs.scrollIntoView?.({ behavior: 'smooth', block: 'center' }); announce('Visualizer settings'); } }));
-  })();
-  // Patch loadMedia so the visualizer never appears when toggled off
-  if (typeof loadMedia === 'function') {
-    const _origLM = loadMedia;
-    loadMedia = function (fp, seekTo) {
-      _origLM(fp, seekTo);
-      if (audioVisualizer.style.display !== 'none' && !loadState('visualizerOn', true)) {
-        audioVisualizer.style.display = 'none';
-        audioVisualizer.setAttribute('aria-hidden', 'true');
-        stopVisualizerLoop();
-      }
-    };
+  // Everything that has to happen around a track change
+  let fadingOut = false, fadeInPending = false;
+  let skippingSilence = false;
+  const _origLM = loadMedia;
+  loadMedia = function (fp, seekTo) {
+    // Some items need work before there is anything to play
+    if (!preparedSources.has(fp)) {
+      if (isWebPageLink(fp)) return prepareThenLoad(fp, seekTo, 'web');
+      if (needsConversion(fp)) return prepareThenLoad(fp, seekTo, 'convert');
+    }
+    prepareToken++;
+    ipcRenderer.send('cancel-convert');
+    perFileReady = false;
+    skippingSilence = false;
+    autoSkipFailures = hasMediaError() ? autoSkipFailures : 0;
+    if (fadingOut) { fadingOut = false; fadeInPending = true; }
+    else if (!sleepFading) rampFade(1, 0.05);
+    clearLyrics();
+    clearChapters();
+    let resumedAt = 0;
+    if (seekTo === undefined && loadState('resumeEnabled', true)) {
+      // Every file carries on from where it was left
+      const lastPos = (stats[normalizePath(fp)] || {}).lastPos || 0;
+      const dur = loadState('durations', {})[normalizePath(fp)];
+      if (lastPos > 5 && (!dur || lastPos < dur - 10)) { seekTo = lastPos; resumedAt = lastPos; }
+    }
+    _origLM(fp, seekTo);
+    applyAudioOnly();
+    loadSidecarFiles(fp);
+    loadChapters(fp);
+    if (resumedAt) announce(`Resuming at ${formatTime(resumedAt)}. Press Control 0 to start over.`);
+  };
+
+  /* ---- Web links and formats that need converting first ---- */
+  const WEB_PAGE_HOSTS = /(^|\.)(youtube\.com|youtube-nocookie\.com|youtu\.be|vimeo\.com|soundcloud\.com|dailymotion\.com|twitch\.tv|tiktok\.com|bandcamp\.com|facebook\.com|instagram\.com|x\.com|twitter\.com|reddit\.com)$/i;
+  const CONVERT_EXTS = ['avi', 'wmv', 'wma', 'flv', 'mpg', 'mpeg', 'vob', 'ts', 'm2ts', 'asf', 'rm', 'rmvb', 'ape', 'aiff', 'aif', 'ac3', 'dts', 'amr'];
+  function isWebPageLink(p) {
+    if (!/^https?:/i.test(p)) return false;
+    try { return WEB_PAGE_HOSTS.test(new URL(p).hostname); } catch (e) { return false; }
   }
+  function needsConversion(p) {
+    return !isUrl(p) && CONVERT_EXTS.includes(p.split('.').pop().toLowerCase());
+  }
+  let prepareToken = 0;
+  function prepareThenLoad(fp, seekTo, kind, options) {
+    const token = ++prepareToken;
+    mediaPlayer.pause();
+    currentFilePath = fp;
+    titleDisplay.textContent = kind === 'web' ? 'Getting link…' : 'Converting…';
+    announce(kind === 'web' ? 'Getting the stream. This can take a few seconds.' : `Converting ${getFileName(fp)} so it can play. This happens once per file.`, true);
+    ipcRenderer.invoke(kind === 'web' ? 'resolve-web-media' : 'convert-media', fp, options).then((result) => {
+      if (token !== prepareToken || !result || result.cancelled) return; // the listener moved on
+      if (result.declined) { titleDisplay.textContent = getFileName(fp); announce('Download cancelled, so this cannot be played', true); return; }
+      if (result.error) {
+        titleDisplay.textContent = getFileName(fp);
+        announce(`Cannot play ${getFileName(fp)}: ${result.error}`, true);
+        showOSD(`Cannot play: ${result.error}`);
+        if (window.ampCue) window.ampCue('error');
+        moveOnAfterFailure(fp);
+        return;
+      }
+      if (kind === 'web') {
+        preparedSources.set(fp, result.url);
+        setTimeout(() => preparedSources.delete(fp), 3 * 60 * 60 * 1000); // stream links expire
+        if (result.title) { const titles = loadState('webTitles', {}); titles[fp] = result.title; saveState('webTitles', titles); }
+      } else {
+        preparedSources.set(fp, toMediaSrc(result.path));
+      }
+      loadMedia(fp, seekTo);
+      renderPlaylist();
+    });
+  }
+  let lastProgressSpoken = -25;
+  ipcRenderer.on('tool-progress', (event, { label, percent }) => {
+    showOSD(`${label}: ${percent}%`);
+    if (percent === 0) lastProgressSpoken = -25;
+    if (percent >= lastProgressSpoken + 25) { lastProgressSpoken = percent; announce(`${label} ${percent} percent`); }
+  });
+  function hasMediaError() { return !!mediaPlayer.error; }
+
+  // Subtitles and lyrics saved next to the media file, with the same name
+  async function loadSidecarFiles(fp) {
+    if (isUrl(fp)) return;
+    let found = null;
+    try { found = await ipcRenderer.invoke('read-sidecars', fp); }
+    catch (e) { console.error('Could not read sidecar files', e); }
+    if (!found || currentFilePath !== fp) return; // the listener has moved on
+    if (found.subtitle) {
+      loadSubtitleText(decodeText(found.subtitle.data), found.subtitle.name);
+      announce('Subtitles found and loaded');
+    }
+    if (found.lyrics) parseLRC(decodeText(found.lyrics), true);
+  }
+
+  // Unplayable or missing files: say so, then keep the queue moving
+  let autoSkipFailures = 0;
+  const retriedSources = new Set();
+  mediaPlayer.addEventListener('error', () => {
+    const err = mediaPlayer.error;
+    if (!err || !currentFilePath) return;
+    suppressPlayAnnounce = false;
+    const reasons = { 1: 'loading was stopped', 2: 'a network error occurred', 3: 'the file is damaged or uses an unsupported codec', 4: 'the file is missing or its format is not supported' };
+    // A local file the engine turned down may still convert; a link may be a page yt-dlp understands
+    if (err.code >= 3 && !retriedSources.has(currentFilePath)) {
+      const failed = currentFilePath;
+      retriedSources.add(failed);
+      preparedSources.delete(failed);
+      if (!isUrl(failed)) { prepareThenLoad(failed, 0, 'convert'); return; }
+      if (/^https?:/i.test(failed)) {
+        ipcRenderer.invoke('resolve-web-media', failed, { onlyIfInstalled: true }).then((found) => {
+          if (currentFilePath === failed && found && found.url) { preparedSources.set(failed, found.url); loadMedia(failed); }
+        });
+      }
+    }
+    const reason = (isUrl(currentFilePath) && err.code === 4) ? 'that link is not a direct media file' : (reasons[err.code] || 'unknown error');
+    announce(`Cannot play ${getFileName(currentFilePath)}: ${reason}`, true);
+    showOSD(`Cannot play: ${reason}`);
+    console.error('Media error', err.code, err.message);
+    moveOnAfterFailure(currentFilePath);
+  });
+  function moveOnAfterFailure(failedFile) {
+    autoSkipFailures++;
+    const canAdvance = currentPlaylistIndex < playlist.length - 1 || repeatMode === 'all';
+    if (autoplayToggle.checked && canAdvance && autoSkipFailures < playlist.length) {
+      setTimeout(() => { if (currentFilePath === failedFile) playNext(); }, 2500); // unless the user already moved on
+    }
+  }
+  mediaPlayer.addEventListener('playing', () => { autoSkipFailures = 0; });
+
+
 
 
   /* ---- M3U export + Add Folder buttons in playlist sidebar ---- */
   const headerBtns = document.querySelector('#playlist-sidebar .header-btns');
   if (headerBtns) {
     const m3uBtn = ce('button', { class: 'icon-btn tooltip', 'aria-label': 'Export M3U Playlist', title: 'Export M3U', text: 'M3U',
-      onclick: async () => { if (playlist.length === 0) return announce('Playlist empty'); const ok = await ipcRenderer.invoke('save-m3u', playlist); announce(ok ? 'M3U exported' : 'Export cancelled'); } });
+      onclick: exportPlaylistM3U });
     const folderBtn = ce('button', { class: 'icon-btn tooltip', 'aria-label': 'Add Folder to Playlist', title: 'Add Folder', text: '📁',
-      onclick: async () => { const files = await ipcRenderer.invoke('open-directory-dialog'); if (Array.isArray(files) && files.length) { files.forEach(f => addToPlaylist(f)); if (currentPlaylistIndex === -1) playPlaylistItem(playlist.length - files.length); announce(`Added ${files.length} files from folder`); } } });
+      onclick: async () => { const files = await ipcRenderer.invoke('open-directory-dialog'); if (Array.isArray(files)) { if (files.length) addFilesAndPlay(files); else announce('No media files found in that folder'); } } });
     headerBtns.appendChild(m3uBtn);
     headerBtns.appendChild(folderBtn);
   }
@@ -954,33 +985,28 @@
   const subStyleSection = Array.from(moreOpts.querySelectorAll('h3')).find(h => h.textContent.includes('Subtitle Customization'));
   if (subStyleSection && subStyleSection.parentElement) subStyleSection.parentElement.appendChild(subFontWrap);
 
-  /* ---- Rotate / Flip ---- */
-  function applyVideoTransform() {
-    mediaPlayer.style.transform = `scale(${videoZoom}) rotate(${videoRotation}deg)` + (flipH ? ' scaleX(-1)' : '') + (flipV ? ' scaleY(-1)' : '');
-  }
-  if (zoomSelect) zoomSelect.addEventListener('change', () => { videoZoom = parseFloat(zoomSelect.value); applyVideoTransform(); });
-  const rotSection = ce('div', { class: 'mo-section', style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:8px;border:1px solid #333;' }, [
-    ce('h3', { style: 'margin:0;font-size:1rem;color:var(--focus-color);', text: 'Rotate & Flip' }),
-    ce('div', { style: 'display:flex;gap:6px;' }, [
-      ce('button', { class: 'action-btn-small', style: 'flex:1;', text: '⟲ Left', onclick: () => { videoRotation = (videoRotation - 90) % 360; applyVideoTransform(); announce('Rotated left'); } }),
-      ce('button', { class: 'action-btn-small', style: 'flex:1;', text: 'Right ⟳', onclick: () => { videoRotation = (videoRotation + 90) % 360; applyVideoTransform(); announce('Rotated right'); } })
-    ]),
-    ce('div', { style: 'display:flex;gap:6px;' }, [
-      ce('button', { class: 'action-btn-small', style: 'flex:1;', text: 'Flip H', onclick: () => { flipH = !flipH; applyVideoTransform(); announce('Flip horizontal ' + (flipH ? 'on' : 'off')); } }),
-      ce('button', { class: 'action-btn-small', style: 'flex:1;', text: 'Flip V', onclick: () => { flipV = !flipV; applyVideoTransform(); announce('Flip vertical ' + (flipV ? 'on' : 'off')); } })
-    ])
-  ]);
-  if (moScroll) moScroll.insertBefore(rotSection, moScroll.firstChild);
-
   /* ---- Audio output device selection ---- */
   const audioDevSelect = ce('select', { id: 'audio-device-select', 'aria-label': 'Audio Output Device', style: 'background:#333;color:#fff;border:1px solid #444;padding:5px;border-radius:4px;font-size:0.85rem;' }, [ce('option', { value: '', text: 'System Default' })]);
-  audioDevSelect.addEventListener('change', () => ipcRenderer.send('set-audio-device', audioDevSelect.value));
+  // Audio leaves through the Web Audio graph, so the AudioContext picks the device.
+  audioDevSelect.addEventListener('change', async () => {
+    try {
+      initAudio();
+      await audioCtx.setSinkId(audioDevSelect.value);
+      saveState('audioDevice', audioDevSelect.value);
+      announce(`Audio output: ${audioDevSelect.options[audioDevSelect.selectedIndex].text}`);
+    } catch (e) { console.error('setSinkId failed', e); announce('Could not switch audio output'); }
+  });
   const refreshDevBtn = ce('button', { class: 'action-btn-small', text: 'Refresh', onclick: refreshDevices });
   async function refreshDevices() {
     try {
       const devs = await navigator.mediaDevices.enumerateDevices();
+      const wanted = audioDevSelect.value || loadState('audioDevice', '');
       audioDevSelect.innerHTML = '<option value="">System Default</option>';
       devs.filter(d => d.kind === 'audiooutput').forEach(d => audioDevSelect.appendChild(ce('option', { value: d.deviceId, text: d.label || ('Device ' + d.deviceId.slice(0, 6)) })));
+      const stillThere = Array.from(audioDevSelect.options).some(o => o.value === wanted);
+      audioDevSelect.value = stillThere ? wanted : '';
+      // Follow a saved choice, or fall back cleanly when that device has gone
+      if (wanted && (stillThere ? !audioCtx || audioCtx.sinkId !== wanted : true)) audioDevSelect.dispatchEvent(new Event('change'));
     } catch (e) { announce('Could not list audio devices'); }
   }
   const devWrap = ce('div', { style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:8px;border:1px solid #333;' }, [
@@ -992,8 +1018,7 @@
 
   /* ---- Capture frame to clipboard + bookmark nav + clear history ---- */
   function captureToClipboard() {
-    if (!currentFilePath) return announce('No media loaded');
-    if (isAudioFile(currentFilePath)) return announce('Cannot capture audio');
+    if (!mediaPlayer.videoWidth) return announce('No video picture to copy');
     try {
       const c = document.createElement('canvas');
       c.width = mediaPlayer.videoWidth; c.height = mediaPlayer.videoHeight;
@@ -1007,22 +1032,15 @@
   COMMANDS.push(
     { name: 'Copy Frame to Clipboard', run: () => captureToClipboard() },
     { name: 'Toggle Subtitles', run: () => toggleSubtitles() },
-    { name: 'Rotate Left', run: () => { videoRotation = (videoRotation - 90) % 360; applyVideoTransform(); } },
-    { name: 'Rotate Right', run: () => { videoRotation = (videoRotation + 90) % 360; applyVideoTransform(); } },
     { name: 'Always on Top', run: () => { alwaysOnTop = !alwaysOnTop; ipcRenderer.send('set-always-on-top', alwaysOnTop); } },
-    { name: 'Clear History', run: () => clearHistory() }
+    { name: 'Clear History', run: () => clearHistory() },
   );
   function clearHistory() {
-    saveState('history', []); saveState('stats', {});
-    renderHistory(); renderHome(); announce('History cleared');
+    // The in-memory copy is saved again on exit, so it has to be emptied too
+    Object.keys(stats).forEach(k => delete stats[k]);
+    saveState('history', []); saveState('stats', {}); saveState('resume', null);
+    renderHome(); announce('History cleared');
   }
-  // Clear-history button in the history sidebar
-  const histList = document.getElementById('history-sidebar-list');
-  if (histList && histList.parentElement) {
-    const clearHist = ce('button', { class: 'action-btn-small', text: 'Clear History', style: 'align-self:flex-start;', onclick: clearHistory });
-    histList.parentElement.insertBefore(clearHist, histList);
-  }
-
   // Bookmark jump next / previous
   function jumpBookmark(dir) {
     const bms = getBookmarks();
@@ -1038,102 +1056,32 @@
     { name: 'Previous Bookmark', run: () => jumpBookmark(-1) }
   );
 
-  /* ---- YouTube-style keyboard shortcuts (non-conflicting keys) ---- */
-  window.addEventListener('keydown', (e) => {
-    const ae = document.activeElement;
-    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable)) return;
-    if (e.ctrlKey || e.altKey || e.metaKey) return;
-    const k = e.key.toLowerCase();
-    switch (k) {
-      case 'j': e.preventDefault(); mediaPlayer.currentTime = Math.max(0, mediaPlayer.currentTime - 10); announce('Back 10s'); break;
-      case 'k': e.preventDefault(); togglePlay(); break;
-      case 'c': e.preventDefault(); toggleSubtitles(); break;
-      case 'n': e.preventDefault(); playNext(); break;
-      case 'z': e.preventDefault(); videoRotation = (videoRotation - 90) % 360; applyVideoTransform(); announce('Rotated left'); break;
-      case 'x': e.preventDefault(); videoRotation = (videoRotation + 90) % 360; applyVideoTransform(); announce('Rotated right'); break;
-      case 't': e.preventDefault(); alwaysOnTop = !alwaysOnTop; ipcRenderer.send('set-always-on-top', alwaysOnTop); announce('Always on top ' + (alwaysOnTop ? 'on' : 'off')); break;
-      case '[': e.preventDefault(); if (typeof updateSubtitleDelay === 'function') updateSubtitleDelay(-0.5); break;
-      case ']': e.preventDefault(); if (typeof updateSubtitleDelay === 'function') updateSubtitleDelay(0.5); break;
-    }
-  });
-
-  /* ---- Touch gestures (swipe to seek, tap to play/pause) ---- */
-  let touchStartX = 0, touchStartY = 0, touchStartT = 0, touchMoved = false;
-  videoWrapper.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 1) return;
-    touchStartX = e.touches[0].clientX; touchStartY = e.touches[0].clientY;
-    touchStartT = mediaPlayer.currentTime; touchMoved = false;
-  }, { passive: true });
-  videoWrapper.addEventListener('touchmove', (e) => {
-    if (e.touches.length !== 1 || !mediaPlayer.duration) return;
-    const dx = e.touches[0].clientX - touchStartX;
-    if (Math.abs(dx) > 10) {
-      touchMoved = true;
-      const delta = (dx / videoWrapper.clientWidth) * mediaPlayer.duration * 0.2;
-      mediaPlayer.currentTime = Math.max(0, Math.min(mediaPlayer.duration, touchStartT + delta));
-    }
-  }, { passive: true });
-  videoWrapper.addEventListener('touchend', () => {
-    // Tap-to-play is handled by the existing click handler; only seek happened on move.
-    touchMoved = false;
-  });
+  // On-demand position reports, instead of a constant stream of time updates
+  function sayTime() {
+    if (!hasMedia()) return announce('No media loaded', true);
+    const dur = mediaPlayer.duration;
+    if (!isFinite(dur)) return announce(`${formatTime(mediaPlayer.currentTime)} elapsed`, true);
+    const sleepNote = sleepTimerEndTime ? `. Sleep timer ends in ${formatTime((sleepTimerEndTime - Date.now()) / 1000)}` : '';
+    announce(`${formatTime(mediaPlayer.currentTime)} elapsed of ${formatTime(dur)}, ${formatTime(dur - mediaPlayer.currentTime)} remaining${sleepNote}`, true);
+  }
+  function sayNowPlaying() {
+    if (!currentFilePath) return announce('Nothing is playing', true);
+    const pos = currentPlaylistIndex >= 0 ? `, track ${currentPlaylistIndex + 1} of ${playlist.length}` : '';
+    announce(`${mediaPlayer.paused ? 'Paused' : 'Now Playing'}: ${getFileName(currentFilePath)}${pos}`, true);
+  }
+  COMMANDS.push({ name: 'Say Current Time', run: sayTime }, { name: 'Say What Is Playing', run: sayNowPlaying });
 
   /* ====================================================================
      MORE FEATURES
      ==================================================================== */
 
-  let audioOnly = false;
+  let _audioOnly = loadState('audioOnly', false);
+  // The one place that decides what is shown: the video picture or the visualizer
   function applyAudioOnly() {
-    if (audioOnly) {
-      mediaPlayer.style.visibility = 'hidden';
-      audioVisualizer.style.display = 'flex';
-      audioVisualizer.setAttribute('aria-hidden', 'false');
-      startVisualizerLoop();
-    } else {
-      mediaPlayer.style.visibility = '';
-      if (!isAudioFile(currentFilePath)) { audioVisualizer.style.display = 'none'; stopVisualizerLoop(); }
-    }
-  }
-  mediaPlayer.addEventListener('loadedmetadata', () => { if (audioOnly && !isAudioFile(currentFilePath)) applyAudioOnly(); });
-
-  // --- Themes + accent color (General settings) ---
-  const generalSettings = document.getElementById('general-settings');
-  if (generalSettings) {
-    const themeWrap = ce('div', { style: 'display:flex; flex-direction:column; gap:8px; margin-top:10px;' }, [
-      ce('span', { style: 'font-size:0.9rem;color:#ccc;', text: 'Theme:' }),
-      (() => {
-        const s = ce('select', { id: 'theme-select', 'aria-label': 'Theme', style: 'background:#333;color:#fff;border:1px solid #444;padding:5px;border-radius:4px;' }, [
-          ce('option', { value: 'dark', text: 'Dark (Default)' }),
-          ce('option', { value: 'light', text: 'Light' }),
-          ce('option', { value: 'amoled', text: 'AMOLED Black' })
-        ]);
-        s.addEventListener('change', () => { document.documentElement.setAttribute('data-theme', s.value === 'dark' ? '' : s.value); saveState('theme', s.value); });
-        return s;
-      })(),
-      (() => {
-        const wrap = ce('label', { style: 'display:flex;align-items:center;gap:10px;font-size:0.9rem;color:#ccc;cursor:pointer;' }, [
-          ce('span', { text: 'Accent color:' }),
-          (() => { const c = ce('input', { type: 'color', id: 'accent-color', value: '#3ea6ff', 'aria-label': 'Accent color' }); c.addEventListener('input', () => { document.documentElement.style.setProperty('--focus-color', c.value); saveState('accent', c.value); }); return c; })()
-        ]);
-        return wrap;
-      })()
-    ]);
-    generalSettings.appendChild(themeWrap);
-    const savedTheme = loadState('theme', 'dark');
-    themeSelectApply(savedTheme);
-    const savedAccent = loadState('accent', null);
-    if (savedAccent) document.documentElement.style.setProperty('--focus-color', savedAccent);
-  }
-  function themeSelectApply(v) { document.documentElement.setAttribute('data-theme', v === 'dark' ? '' : v); const ts = document.getElementById('theme-select'); if (ts) ts.value = v; }
-
-  // --- Subtitle background opacity ---
-  const subBgOpacity = ce('input', { type: 'range', id: 'sub-bg-opacity', min: '0', max: '1', step: '0.05', value: '0.85', 'aria-label': 'Subtitle background opacity' });
-  subBgOpacity.addEventListener('input', () => { document.documentElement.style.setProperty('--cue-bg', `rgba(0,0,0,${subBgOpacity.value})`); });
-  const subStyleSection2 = Array.from(moreOpts.querySelectorAll('h3')).find(h => h.textContent.includes('Subtitle Customization'));
-  if (subStyleSection2 && subStyleSection2.parentElement) {
-    subStyleSection2.parentElement.appendChild(ce('div', { style: 'display:flex;flex-direction:column;gap:4px;margin-top:8px;' }, [
-      ce('span', { style: 'font-size:0.85rem;color:#ccc;', text: 'Background Opacity:' }), subBgOpacity
-    ]));
+    const noPicture = isAudioFile(currentFilePath) || (mediaPlayer.readyState >= 1 && !mediaPlayer.videoWidth);
+    const hideVideo = _audioOnly || noPicture;
+    mediaPlayer.style.display = hideVideo ? 'none' : '';
+    audioVisualizer.style.display = hideVideo && currentFilePath ? 'flex' : 'none';
   }
 
   // --- Transcript panel (accessible subtitle browser) ---
@@ -1143,12 +1091,13 @@
     transcriptList.innerHTML = '';
     let cues = [];
     if (mediaPlayer.textTracks && mediaPlayer.textTracks.length) {
-      const t = mediaPlayer.textTracks[0];
-      if (t.cues) for (let i = 0; i < t.cues.length; i++) cues.push({ start: t.cues[i].startTime, text: t.cues[i].text });
+      const t = Array.from(mediaPlayer.textTracks).find(tr => tr.kind === 'subtitles' && tr.cues && tr.cues.length);
+      if (t) for (let i = 0; i < t.cues.length; i++) cues.push({ start: t.cues[i].startTime, text: t.cues[i].text });
     }
     if (!cues.length) { transcriptList.innerHTML = '<li style="color:#888;padding:8px;">No subtitles loaded.</li>'; return; }
     const q = transcriptSearch.value.toLowerCase();
     cues.forEach(c => {
+      c.text = c.text.replace(/<[^>]+>/g, ''); // italics and voice tags are not for reading
       if (q && !c.text.toLowerCase().includes(q)) return;
       const li = ce('li', { class: 'transcript-item', tabIndex: 0, role: 'button', 'aria-label': `At ${formatTime(c.start)}: ${c.text}` }, [
         ce('span', { class: 'transcript-time', text: formatTime(c.start) }),
@@ -1161,36 +1110,28 @@
     });
   }
   transcriptSearch.addEventListener('input', renderTranscript);
-  if (mediaPlayer.textTracks) {
-    mediaPlayer.textTracks.addEventListener('cuechange', () => { if (document.body.contains(transcriptList)) renderTranscript(); });
-    mediaPlayer.textTracks.addEventListener('addtrack', () => { if (document.body.contains(transcriptList)) renderTranscript(); });
-  }
+  document.addEventListener('subtitles-changed', renderTranscript);
   const transcriptSection = ce('div', { class: 'mo-section', style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:8px;border:1px solid #333;' }, [
     ce('h3', { style: 'margin:0;font-size:1rem;color:var(--focus-color);display:flex;justify-content:space-between;align-items:center;', text: 'Transcript' }),
     transcriptSearch, transcriptList
   ]);
   if (moScroll) moScroll.insertBefore(transcriptSection, moScroll.firstChild);
-  COMMANDS.push({ name: 'Show Transcript', run: () => { showHome(); /* focus transcript */ setTimeout(() => transcriptSearch.focus(), 50); } });
+  COMMANDS.push({ name: 'Show Transcript', run: () => {
+    if (!moreOptionsSidebar.classList.contains('open')) toggleMoreOptionsSidebar();
+    setTimeout(() => transcriptSearch.focus(), 350);
+  } });
 
   // --- Keyboard shortcuts help overlay ---
-  const SHORTCUTS = [
-    ['Space', 'Play / Pause'], ['F', 'Fullscreen'], ['M', 'Mute'], ['L', 'Repeat (off/one/all)'],
-    ['P', 'Picture-in-Picture'], ['Q', 'Playlist'], ['B', 'Bookmarks'], ['Shift+B', 'Add Bookmark'],
-    ['O', 'More Options'], ['E', 'Settings'], ['S', 'Screenshot'], ['C', 'Subtitles on/off'],
-    ['J / K', 'Back 10s / Play-Pause'], ['N', 'Next track'], ['Z / X', 'Rotate left / right'],
-    ['T', 'Always on top'], ['[ / ]', 'Subtitle delay -/+'], ['Ctrl+O', 'Open files'],
-    ['Ctrl+G', 'Go to time'], ['Ctrl+Shift+P', 'Command palette'], ['Ctrl+H', 'Home'],
-    ['I', 'Media Information'], ['1-9', 'Jump to bookmark'], ['?', 'This help'],
-    ['← / →', 'Seek back / forward 10s'], ['Shift+↑ / ↓', 'Speed up / down'],
-    ['↑ / ↓', 'Volume up / down'], [', / .', 'Frame step back / forward'],
-    ['Ctrl+↑ / ↓', 'Move playlist item']
+  // Keys that belong to whatever has focus, so they stay as they are and are not remappable
+  const FOCUS_KEYS = [
+    ['Esc', 'Close panel or exit fullscreen'], ['F1', 'This help'],
+    ['← / → on seek bar', 'Seek 10 seconds'], ['Page Up / Down on seek bar', 'Seek 1 minute'],
+    ['↑ / ↓ in queue', 'Move between tracks'], ['Ctrl+↑ / ↓ in queue', 'Move the track'],
+    ['Enter in queue', 'Play the track'], ['Shift+Enter in queue', 'Play the track next'], ['Delete in queue', 'Remove the track']
   ];
   const helpModal = ce('div', { id: 'help-modal', class: 'modal', 'aria-hidden': 'true', style: 'display:none;' });
   const helpList = ce('ul', { id: 'help-list', style: 'list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:6px 24px;overflow-y:auto;max-height:60vh;' });
-  SHORTCUTS.forEach(([k, d]) => helpList.appendChild(ce('li', { style: 'display:flex;gap:10px;font-size:0.85rem;' }, [
-    ce('kbd', { style: 'background:#333;padding:2px 8px;border-radius:4px;min-width:60px;text-align:center;', text: k }),
-    ce('span', { text: d })
-  ])));
+
   const helpCloseBtn = ce('button', { class: 'icon-btn', 'aria-label': 'Close help', html: '<svg viewBox="0 0 24 24" style="width:24px;height:24px;"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>' });
   const helpBox = ce('div', { class: 'modal-content', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Keyboard Shortcuts', style: 'min-width:560px;padding:20px;' }, [
     ce('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;' }, [ce('h2', { style: 'margin:0;', text: 'Keyboard Shortcuts' }), helpCloseBtn]),
@@ -1204,14 +1145,10 @@
   enableModalA11y(helpModal, helpCloseBtn, closeHelp);
   COMMANDS.push({ name: 'Keyboard Shortcuts', run: openHelp });
   COMMANDS.push({ name: 'Set as Default Media Player', run: () => ipcRenderer.send('open-default-apps') });
-  window.addEventListener('keydown', (e) => {
-    const ae = document.activeElement;
-    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable)) return;
-    if (e.key === '?' ) { e.preventDefault(); openHelp(); }
-  });
+
   // Make the progress slider explain its keys to screen readers
   progressSlider.setAttribute('aria-describedby', 'progress-help');
-  const progressHelp = ce('span', { id: 'progress-help', class: 'sr-only', text: 'Use Left and Right arrows to seek ten seconds. Press Home or End for start or end. Page Up and Page Down also seek.' });
+  const progressHelp = ce('span', { id: 'progress-help', class: 'sr-only', text: 'Use Left and Right arrows to seek ten seconds. Page Up and Page Down seek one minute. Home and End jump to the start or end.' });
   progressSlider.parentElement.appendChild(progressHelp);
 
   // --- Volume / Speed announcements for screen readers ---
@@ -1223,7 +1160,7 @@
   let lastRateAnnounce = 0;
   mediaPlayer.addEventListener('ratechange', () => {
     const now = Date.now();
-    if (now - lastRateAnnounce > 400) { lastRateAnnounce = now; announce(`Speed ${mediaPlayer.playbackRate.toFixed(1)} times`); }
+    if (!silenceSkipIsActive() && perFileReady && now - lastRateAnnounce > 400) { lastRateAnnounce = now; announce(`Speed ${formatRate(mediaPlayer.playbackRate)} times`); }
   });
 
   // --- Wire the new General-setting checkboxes ---
@@ -1233,7 +1170,7 @@
   if (homeToggle) { homeToggle.checked = loadState('startInHome', false); homeToggle.addEventListener('change', () => saveState('startInHome', homeToggle.checked)); }
 
   // Add Audio-Only to Quick Toggles
-  mkToggle && mkToggle('Audio Only', () => audioOnly, () => { audioOnly = !audioOnly; applyAudioOnly(); announce('Audio only ' + (audioOnly ? 'on' : 'off')); });
+  mkToggle('Audio Only', () => _audioOnly, () => audioOnlyBtn.click());
 
   // Show home screen on launch when there is no media to resume into
   if (!mediaPlayer.src || mediaPlayer.src.endsWith('index.html')) {
@@ -1244,276 +1181,6 @@
      FEATURE PACK 2: Spatial Audio, A-B Loop, Media Info, EQ Presets,
      Chapters, Speed Presets, Enhanced Visualizer Themes, Startup
      ==================================================================== */
-
-  /* ------------------------------------------------- SPATIAL AUDIO -- */
-  // Inject spatial processing nodes into the audio graph after analyserNode
-  let spatialEnabled = false;
-  let spatialMode = 'off';
-  let spatialWidth = 1.0;
-  let spatialSplitter = null, spatialMerger = null;
-  let spatialGainL = null, spatialGainR = null, spatialGainMid = null, spatialGainSide = null;
-  let spatialDelay = null, spatialDelayGain = null;
-  let spatialFilterL = null, spatialFilterR = null;
-
-  function initSpatialNodes() {
-    if (!audioCtx || spatialSplitter) return;
-    spatialSplitter = audioCtx.createChannelSplitter(2);
-    spatialMerger = audioCtx.createChannelMerger(2);
-    spatialGainL = audioCtx.createGain();
-    spatialGainR = audioCtx.createGain();
-    spatialGainMid = audioCtx.createGain();
-    spatialGainSide = audioCtx.createGain();
-    spatialDelay = audioCtx.createDelay(1.0);
-    spatialDelay.delayTime.value = 0.025;
-    spatialDelayGain = audioCtx.createGain();
-    spatialDelayGain.gain.value = 0;
-    spatialFilterL = audioCtx.createBiquadFilter();
-    spatialFilterL.type = 'lowpass';
-    spatialFilterL.frequency.value = 8000;
-    spatialFilterR = audioCtx.createBiquadFilter();
-    spatialFilterR.type = 'lowpass';
-    spatialFilterR.frequency.value = 8000;
-    // Wire default: passthrough
-    spatialSplitter.connect(spatialGainL, 0, 0);
-    spatialSplitter.connect(spatialGainR, 1, 0);
-    spatialGainL.connect(spatialMerger, 0, 0);
-    spatialGainR.connect(spatialMerger, 0, 1);
-  }
-
-  let _spatialExtraNodes = [];
-  function _cleanSpatialExtra() { _spatialExtraNodes.forEach(n => { try { n.disconnect(); } catch (e) {} }); _spatialExtraNodes = []; }
-
-  function applySpatial() {
-    if (!audioCtx || !analyserNode || !normalizationNode) return;
-    if (!spatialSplitter) initSpatialNodes();
-    // Disconnect all known connections
-    try { analyserNode.disconnect(normalizationNode); } catch (e) {}
-    try { analyserNode.disconnect(spatialSplitter); } catch (e) {}
-    try { spatialMerger.disconnect(normalizationNode); } catch (e) {}
-    _cleanSpatialExtra();
-
-    if (spatialMode === 'off' || !spatialEnabled) {
-      analyserNode.connect(normalizationNode);
-      spatialEnabled = false;
-      return;
-    }
-
-    spatialEnabled = true;
-    analyserNode.connect(spatialSplitter);
-    const w = Math.max(0, Math.min(2, spatialWidth));
-
-    switch (spatialMode) {
-      case 'wide': {
-        // Simple L/R amplification difference for widening
-        spatialGainL.gain.value = 0.5 + w * 0.5;
-        spatialGainR.gain.value = 0.5 + w * 0.5;
-        spatialSplitter.disconnect();
-        spatialSplitter.connect(spatialGainL, 0, 0);
-        spatialSplitter.connect(spatialGainR, 1, 0);
-        // Add cross-feed for wider image
-        const xL = audioCtx.createGain(); xL.gain.value = w * 0.15;
-        const xR = audioCtx.createGain(); xR.gain.value = w * 0.15;
-        _spatialExtraNodes.push(xL, xR);
-        spatialSplitter.connect(xL, 0, 0);
-        spatialSplitter.connect(xR, 1, 0);
-        xL.connect(spatialMerger, 0, 1);
-        xR.connect(spatialMerger, 0, 0);
-        spatialGainL.connect(spatialMerger, 0, 0);
-        spatialGainR.connect(spatialMerger, 0, 1);
-        spatialMerger.connect(normalizationNode);
-        break;
-      }
-      case 'surround': {
-        // Cross-feed with delay + low-pass
-        spatialDelay.delayTime.value = 0.02 + w * 0.01;
-        spatialGainL.gain.value = 1; spatialGainR.gain.value = 1;
-        spatialSplitter.connect(spatialGainL, 0, 0);
-        spatialSplitter.connect(spatialGainR, 1, 0);
-        spatialGainL.connect(spatialMerger, 0, 0);
-        spatialGainR.connect(spatialMerger, 0, 1);
-        const cG = audioCtx.createGain(); cG.gain.value = w * 0.35;
-        _spatialExtraNodes.push(cG);
-        spatialSplitter.connect(spatialDelay, 1, 0);
-        spatialDelay.connect(cG);
-        cG.connect(spatialFilterL);
-        cG.connect(spatialFilterR);
-        spatialFilterL.connect(spatialMerger, 0, 1);
-        spatialFilterR.connect(spatialMerger, 0, 0);
-        spatialMerger.connect(normalizationNode);
-        break;
-      }
-      case 'theater': {
-        // Long delay + feedback for room simulation
-        spatialDelay.delayTime.value = 0.03 + w * 0.06;
-        spatialGainL.gain.value = 1; spatialGainR.gain.value = 1;
-        spatialSplitter.connect(spatialGainL, 0, 0);
-        spatialSplitter.connect(spatialGainR, 1, 0);
-        spatialGainL.connect(spatialMerger, 0, 0);
-        spatialGainR.connect(spatialMerger, 0, 1);
-        const rG = audioCtx.createGain(); rG.gain.value = w * 0.3;
-        const rD = audioCtx.createDelay(1.0); rD.delayTime.value = 0.08;
-        const rF = audioCtx.createBiquadFilter(); rF.type = 'lowpass'; rF.frequency.value = 2500;
-        _spatialExtraNodes.push(rG, rD, rF);
-        spatialSplitter.connect(rD, 0, 0);
-        rD.connect(rF);
-        rF.connect(rG);
-        rG.connect(spatialMerger, 0, 0);
-        rG.connect(spatialMerger, 0, 1);
-        spatialMerger.connect(normalizationNode);
-        break;
-      }
-      case 'headphone': {
-        // Binaural cross-feed with high-pass filtering
-        spatialGainL.gain.value = 1 - w * 0.2;
-        spatialGainR.gain.value = 1 - w * 0.2;
-        spatialSplitter.connect(spatialGainL, 0, 0);
-        spatialSplitter.connect(spatialGainR, 1, 0);
-        spatialGainL.connect(spatialMerger, 0, 0);
-        spatialGainR.connect(spatialMerger, 0, 1);
-        const xL = audioCtx.createGain(); xL.gain.value = w * 0.25;
-        const xR = audioCtx.createGain(); xR.gain.value = w * 0.25;
-        const fL = audioCtx.createBiquadFilter(); fL.type = 'highpass'; fL.frequency.value = 400;
-        const fR = audioCtx.createBiquadFilter(); fR.type = 'highpass'; fR.frequency.value = 400;
-        _spatialExtraNodes.push(xL, xR, fL, fR);
-        spatialSplitter.connect(fL, 0, 0);
-        spatialSplitter.connect(fR, 1, 0);
-        fL.connect(xL);
-        fR.connect(xR);
-        xL.connect(spatialMerger, 0, 1);
-        xR.connect(spatialMerger, 0, 0);
-        spatialMerger.connect(normalizationNode);
-        break;
-      }
-      default: { analyserNode.connect(normalizationNode); }
-    }
-  }
-
-  // Spatial Audio UI
-  const spatialModeSelect = ce('select', { id: 'spatial-mode', 'aria-label': 'Spatial Audio Mode', style: 'background:#333;color:#fff;border:1px solid #444;padding:5px;border-radius:4px;' }, [
-    ce('option', { value: 'off', text: 'Off' }),
-    ce('option', { value: 'wide', text: 'Stereo Widening' }),
-    ce('option', { value: 'surround', text: 'Surround Simulation' }),
-    ce('option', { value: 'theater', text: 'Theater Mode' }),
-    ce('option', { value: 'headphone', text: 'Headphone 3D' })
-  ]);
-  const spatialWidthSlider = ce('input', { type: 'range', id: 'spatial-width', min: '0', max: '2', step: '0.05', value: '1', 'aria-label': 'Spatial effect amount' });
-  const spatialWidthVal = ce('span', { style: 'color:var(--focus-color);font-weight:bold;', text: '1.00' });
-  const spatialWrap = ce('div', { style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:8px;border:1px solid #333;' }, [
-    ce('h3', { style: 'margin:0;font-size:1rem;color:var(--focus-color);', text: 'Spatial / 3D Audio' }),
-    ce('label', { style: 'display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#ccc;' }, [
-      ce('input', { type: 'checkbox', id: 'spatial-toggle', 'aria-label': 'Enable spatial audio' }),
-      ce('span', { text: 'Enabled' })
-    ]),
-    ce('div', { style: 'display:flex;flex-direction:column;gap:4px;' }, [
-      ce('span', { style: 'font-size:0.85rem;color:#ccc;', text: 'Mode:' }),
-      spatialModeSelect
-    ]),
-    ce('div', { style: 'display:flex;flex-direction:column;gap:4px;' }, [
-      ce('span', { style: 'font-size:0.85rem;color:#ccc;', text: 'Width / Amount:' }),
-      ce('div', { style: 'display:flex;gap:8px;align-items:center;' }, [spatialWidthSlider, spatialWidthVal])
-    ])
-  ]);
-  if (moScroll) moScroll.insertBefore(spatialWrap, moScroll.firstChild);
-
-  const spatialToggle = spatialWrap.querySelector('#spatial-toggle');
-  spatialModeSelect.addEventListener('change', () => { spatialMode = spatialModeSelect.value; if (spatialToggle.checked) applySpatial(); announce(`Spatial mode: ${spatialModeSelect.options[spatialModeSelect.selectedIndex].text}`); });
-  spatialWidthSlider.addEventListener('input', () => { spatialWidth = parseFloat(spatialWidthSlider.value); spatialWidthVal.textContent = spatialWidth.toFixed(2); if (spatialToggle.checked) applySpatial(); });
-  spatialToggle.addEventListener('change', () => {
-    if (spatialToggle.checked && spatialMode === 'off') { spatialMode = 'wide'; spatialModeSelect.value = 'wide'; }
-    applySpatial();
-    announce(`Spatial audio ${spatialToggle.checked ? 'enabled' : 'disabled'}`);
-  });
-
-  /* ------------------------------------------------- A-B LOOP -- */
-  let abLoopA = null, abLoopB = null, abLoopActive = false;
-  const abStatus = ce('span', { style: 'font-size:0.85rem;color:#aaa;', text: 'A: --  B: --' });
-  const abWrap = ce('div', { style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:6px;border:1px solid #333;' }, [
-    ce('h3', { style: 'margin:0;font-size:1rem;color:var(--focus-color);', text: 'A-B Loop' }),
-    ce('div', { style: 'display:flex;gap:6px;' }, [
-      ce('button', { class: 'action-btn-small', style: 'flex:1;', text: 'Set A', 'aria-label': 'Set loop point A', onclick: () => { abLoopA = mediaPlayer.currentTime; updateABStatus(); announce(`Loop point A set at ${formatTime(abLoopA)}`); } }),
-      ce('button', { class: 'action-btn-small', style: 'flex:1;', text: 'Set B', 'aria-label': 'Set loop point B', onclick: () => { abLoopB = mediaPlayer.currentTime; updateABStatus(); announce(`Loop point B set at ${formatTime(abLoopB)}`); } })
-    ]),
-    ce('div', { style: 'display:flex;gap:6px;' }, [
-      ce('button', { class: 'action-btn-small', style: 'flex:1;background:var(--focus-color);color:#000;font-weight:bold;', text: 'Toggle Loop', 'aria-label': 'Toggle A-B loop', 'aria-pressed': 'false', onclick: function () { abLoopActive = !abLoopActive; this.setAttribute('aria-pressed', abLoopActive ? 'true' : 'false'); this.style.background = abLoopActive ? '#4caf50' : 'var(--focus-color)'; announce(`A-B loop ${abLoopActive ? 'on' : 'off'}`); } }),
-      ce('button', { class: 'action-btn-small', style: 'flex:1;', text: 'Clear', 'aria-label': 'Clear A-B loop points', onclick: () => { abLoopA = null; abLoopB = null; abLoopActive = false; updateABStatus(); announce('Loop points cleared'); } })
-    ]),
-    abStatus
-  ]);
-  function updateABStatus() { abStatus.textContent = `A: ${abLoopA !== null ? formatTime(abLoopA) : '--'}  B: ${abLoopB !== null ? formatTime(abLoopB) : '--'}  ${abLoopActive ? '● Looping' : ''}`; }
-  if (moScroll) moScroll.insertBefore(abWrap, moScroll.firstChild);
-
-  mediaPlayer.addEventListener('timeupdate', () => {
-    if (abLoopActive && abLoopA !== null && abLoopB !== null) {
-      const dur = mediaPlayer.duration || Infinity;
-      const a = Math.min(abLoopA, abLoopB);
-      const b = Math.max(abLoopA, abLoopB);
-      if (mediaPlayer.currentTime >= b || mediaPlayer.currentTime < a) {
-        mediaPlayer.currentTime = a;
-      }
-    }
-  });
-
-  /* ------------------------------------------------- ENHANCED SLEEP TIMER -- */
-  // Replace the simple end-of-track with a full countdown
-  const sleepTimerSelect = document.getElementById('sleep-timer-select');
-  if (sleepTimerSelect) {
-    // Already has options from renderer.js, add countdown ones
-    const extraOpts = [
-      ['5min', '5 minutes'],
-      ['15min', '15 minutes'],
-      ['30min', '30 minutes'],
-      ['60min', '60 minutes'],
-      ['90min', '90 minutes']
-    ];
-    extraOpts.forEach(([v, t]) => {
-      if (!Array.from(sleepTimerSelect.options).some(o => o.value === v)) {
-        sleepTimerSelect.appendChild(ce('option', { value: v, text: t }));
-      }
-    });
-  }
-  let sleepInterval = null;
-  let sleepCountdown = document.getElementById('sleep-countdown');
-  if (!sleepCountdown) {
-    sleepCountdown = ce('span', { id: 'sleep-countdown', style: 'display:none;font-size:0.85rem;color:var(--focus-color);' });
-    if (sleepTimerSelect && sleepTimerSelect.parentElement) {
-      sleepTimerSelect.parentElement.appendChild(sleepCountdown);
-    }
-  }
-  const origSleepChange = sleepTimerSelect ? sleepTimerSelect.onchange : null;
-  if (sleepTimerSelect) {
-    sleepTimerSelect.addEventListener('change', () => {
-      if (sleepInterval) { clearInterval(sleepInterval); sleepInterval = null; sleepCountdown.style.display = 'none'; }
-      const val = sleepTimerSelect.value;
-      if (val === 'off') return;
-      let minutes = 0;
-      if (val === '5min') minutes = 5;
-      else if (val === '15min') minutes = 15;
-      else if (val === '30min') minutes = 30;
-      else if (val === '60min') minutes = 60;
-      else if (val === '90min') minutes = 90;
-      else if (val === 'end') { /* handled by end-of-track */ return; }
-      if (minutes > 0) {
-        let remaining = minutes * 60;
-        sleepInterval = setInterval(() => {
-          remaining--;
-          const m = Math.floor(remaining / 60);
-          const s = remaining % 60;
-          sleepCountdown.textContent = `Sleep in ${m}:${s.toString().padStart(2, '0')}`;
-          sleepCountdown.style.display = 'inline';
-          if (remaining <= 0) {
-            clearInterval(sleepInterval);
-            sleepInterval = null;
-            mediaPlayer.pause();
-            sleepCountdown.style.display = 'none';
-            sleepTimerSelect.value = 'off';
-            announce('Sleep timer: player stopped');
-            showOSD('Sleep timer finished');
-          }
-        }, 1000);
-        announce(`Sleep timer set for ${minutes} minutes`);
-      }
-    });
-  }
 
   /* ------------------------------------------------- MEDIA INFORMATION OVERLAY -- */
   const mediaInfoModal = ce('div', { id: 'media-info-modal', class: 'modal', 'aria-hidden': 'true', style: 'display:none;' });
@@ -1540,14 +1207,14 @@
       const dur = mediaPlayer.duration ? formatTime(mediaPlayer.duration) : 'N/A';
       const audioT = mediaPlayer.audioTracks ? mediaPlayer.audioTracks.length : (isAudioFile(currentFilePath) ? 1 : 'N/A');
       html = `<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 16px;">
-        <span style="color:#888;">File:</span><span>${name}</span>
-        <span style="color:#888;">Type:</span><span>${ext}</span>
+        <span style="color:#888;">File:</span><span>${escapeHtml(name)}</span>
+        <span style="color:#888;">Type:</span><span>${escapeHtml(ext)}</span>
         <span style="color:#888;">Duration:</span><span>${dur}</span>
         <span style="color:#888;">Resolution:</span><span>${w} × ${h}</span>
         <span style="color:#888;">Audio Tracks:</span><span>${audioT}</span>
         <span style="color:#888;">Volume:</span><span>${Math.round(mediaPlayer.volume * 100)}%</span>
         <span style="color:#888;">Speed:</span><span>${mediaPlayer.playbackRate.toFixed(2)}x</span>
-        <span style="color:#888;">Path:</span><span style="word-break:break-all;font-size:0.8rem;">${currentFilePath}</span>
+        <span style="color:#888;">Path:</span><span style="word-break:break-all;font-size:0.8rem;">${escapeHtml(currentFilePath)}</span>
       </div>`;
     } else {
       html = '<p style="color:#888;">No media loaded.</p>';
@@ -1558,214 +1225,93 @@
     mediaInfoContent.querySelector('button').focus();
   }
   COMMANDS.push({ name: 'Media Information', run: openMediaInfo });
-  window.addEventListener('keydown', (e) => {
-    const ae = document.activeElement;
-    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable)) return;
-    if (e.ctrlKey || e.altKey || e.metaKey) return;
-    if (e.key === 'i' && !e.shiftKey) { e.preventDefault(); openMediaInfo(); }
-  });
 
-  /* ------------------------------------------------- EQ PRESET MANAGER -- */
-  const eqPresetName = ce('input', { type: 'text', id: 'eq-preset-name', placeholder: 'Preset name…', 'aria-label': 'EQ preset name', style: 'padding:6px;background:#222;color:#fff;border:1px solid #444;border-radius:4px;flex:1;' });
-  const eqSaveBtn = ce('button', { class: 'action-btn-small', text: 'Save', 'aria-label': 'Save current EQ as preset', onclick: saveEQPreset });
-  const eqLoadSelect = ce('select', { id: 'eq-preset-load', 'aria-label': 'Load EQ preset', style: 'background:#333;color:#fff;border:1px solid #444;padding:5px;border-radius:4px;flex:2;' });
-  const eqDelBtn = ce('button', { class: 'action-btn-small', text: 'Delete', 'aria-label': 'Delete selected EQ preset', onclick: deleteEQPreset });
-  const eqPresetWrap = ce('div', { style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:8px;border:1px solid #333;' }, [
-    ce('h3', { style: 'margin:0;font-size:1rem;color:var(--focus-color);', text: 'EQ Presets' }),
-    ce('div', { style: 'display:flex;gap:6px;' }, [eqPresetName, eqSaveBtn]),
-    ce('div', { style: 'display:flex;gap:6px;' }, [eqLoadSelect, eqDelBtn])
-  ]);
-  const eqSettings = document.getElementById('eq-settings');
-  // Built-in EQ presets
-  const BUILTIN_EQ = {
-    'Flat':       [0,0,0,0,0,0,0,0,0,0],
-    'Rock':       [5,4,3,2,1,0,-1,-1,2,3],
-    'Pop':        [-1,0,2,4,5,4,2,1,-1,-1],
-    'Jazz':       [4,3,2,1,2,1,0,-1,2,4],
-    'Classical':  [5,4,3,3,2,1,0,-1,0,2],
-    'Dance':      [5,4,2,1,0,-1,-1,1,3,5],
-    'Speech':     [-2,-1,0,2,3,4,3,1,-1,-2],
-    'Bass Boost': [6,5,4,3,1,0,-1,-2,-2,-1],
-    'Loudness':   [4,3,2,1,0,0,1,2,3,4],
-    'Soft':       [2,1,0,-1,-2,-2,-1,0,1,2]
-  };
-  const builtinEqWrap = ce('div', { style: 'display:flex;flex-wrap:wrap;gap:4px;margin:8px 0;' });
-  Object.keys(BUILTIN_EQ).forEach(name => {
-    builtinEqWrap.appendChild(ce('button', {
-      class: 'action-btn-small',
-      style: 'flex:0 0 auto;font-size:0.75rem;',
-      text: name,
-      'aria-label': `EQ preset: ${name}`,
-      onclick: () => {
-        const bands = BUILTIN_EQ[name];
-        document.querySelectorAll('.eq-slider').forEach((s, i) => {
-          if (bands[i] !== undefined) { s.value = bands[i]; s.dispatchEvent(new Event('input')); }
-        });
-        if (boostSlider) { boostSlider.value = 0; boostSlider.dispatchEvent(new Event('input')); }
-        announce(`EQ: ${name}`);
-      }
-    }));
-  });
-  if (eqSettings) {
-    eqSettings.insertBefore(builtinEqWrap, eqSettings.firstChild);
-    eqSettings.appendChild(eqPresetWrap);
-  }
-  function saveEQPreset() {
-    const name = eqPresetName.value.trim();
-    if (!name) { announce('Enter a preset name'); return; }
-    const presets = loadState('eqPresets', {});
-    const bands = [];
-    document.querySelectorAll('.eq-slider').forEach(s => bands.push(parseFloat(s.value)));
-    presets[name] = { bands, boost: parseFloat(boostSlider?.value || 0) };
-    saveState('eqPresets', presets);
-    refreshEQPresets();
-    announce(`EQ preset "${name}" saved`);
-  }
-  function loadEQPreset(name) {
-    const presets = loadState('eqPresets', {});
-    const p = presets[name];
-    if (!p) return;
-    document.querySelectorAll('.eq-slider').forEach((s, i) => { if (p.bands[i] !== undefined) { s.value = p.bands[i]; s.dispatchEvent(new Event('input')); } });
-    if (boostSlider && typeof p.boost === 'number') { boostSlider.value = p.boost; boostSlider.dispatchEvent(new Event('input')); }
-    announce(`EQ preset "${name}" loaded`);
-  }
-  function deleteEQPreset() {
-    const name = eqLoadSelect.value;
-    if (!name) { announce('Select a preset to delete'); return; }
-    const presets = loadState('eqPresets', {});
-    delete presets[name];
-    saveState('eqPresets', presets);
-    refreshEQPresets();
-    announce(`EQ preset "${name}" deleted`);
-  }
-  function refreshEQPresets() {
-    const presets = loadState('eqPresets', {});
-    eqLoadSelect.innerHTML = '<option value="">-- Select preset --</option>';
-    Object.keys(presets).forEach(k => eqLoadSelect.appendChild(ce('option', { value: k, text: k })));
-  }
-  eqLoadSelect.addEventListener('change', () => { if (eqLoadSelect.value) loadEQPreset(eqLoadSelect.value); });
-  refreshEQPresets();
 
-  /* ------------------------------------------------- CHAPTER NAVIGATION -- */
-  const chapterSelect = ce('select', { id: 'chapter-select', 'aria-label': 'Chapter navigation', style: 'background:#333;color:#fff;border:1px solid #444;padding:5px;border-radius:4px;' });
-  const chapterWrap = ce('div', { style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:8px;border:1px solid #333;', html: '<h3 style="margin:0;font-size:1rem;color:var(--focus-color);">Chapters</h3>' });
-  chapterWrap.appendChild(chapterSelect);
-  if (moScroll) moScroll.insertBefore(chapterWrap, moScroll.firstChild);
-  chapterSelect.addEventListener('change', () => {
-    const t = parseFloat(chapterSelect.value);
-    if (isFinite(t)) { mediaPlayer.currentTime = t; announce(`Jumped to chapter ${chapterSelect.options[chapterSelect.selectedIndex].text}`); }
-  });
-  function refreshChapters() {
-    chapterSelect.innerHTML = '<option value="">No chapters</option>';
-    if (mediaPlayer.textTracks) {
-      for (let i = 0; i < mediaPlayer.textTracks.length; i++) {
-        const t = mediaPlayer.textTracks[i];
-        if (t.kind === 'chapters' && t.cues && t.cues.length) {
-          chapterSelect.innerHTML = '';
-          for (let j = 0; j < t.cues.length; j++) {
-            const c = t.cues[j];
-            chapterSelect.appendChild(ce('option', { value: c.startTime, text: c.text + ' (' + formatTime(c.startTime) + ')' }));
-          }
-          break;
-        }
-      }
-    }
-    chapterWrap.style.display = chapterSelect.options.length > 1 ? '' : 'none';
-  }
-  mediaPlayer.addEventListener('loadedmetadata', refreshChapters);
-  mediaPlayer.textTracks?.addEventListener('addtrack', refreshChapters);
-
-  /* ------------------------------------------------- SPEED PRESET BUTTONS -- */
-  const speedBtns = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
-  const speedPresetWrap = ce('div', { style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:8px;border:1px solid #333;' }, [
-    ce('h3', { style: 'margin:0;font-size:1rem;color:var(--focus-color);', text: 'Speed Presets' }),
-    ce('div', { style: 'display:flex;flex-wrap:wrap;gap:4px;' },
-      speedBtns.map(sp => ce('button', {
-        class: 'action-btn-small',
-        style: 'flex:0 0 auto;min-width:44px;',
-        text: sp + 'x',
-        'aria-label': `Set speed ${sp}x`,
-        onclick: () => { mediaPlayer.playbackRate = sp; updateSpeedUI(); announce(`Speed set to ${sp}x`); }
-      }))
-    )
-  ]);
-  if (moScroll) moScroll.insertBefore(speedPresetWrap, moScroll.firstChild);
-
-  /* ------------------------------------------------- ENHANCED VISUALIZER THEMES -- */
-  // Wire up color/sensitivity settings to CSS custom properties used by the visualizer
-  const visColorPicker = ce('input', { type: 'color', id: 'vis-color', value: '#4facfe', 'aria-label': 'Visualizer color', style: 'width:40px;height:30px;padding:0;border:1px solid #444;border-radius:4px;background:transparent;cursor:pointer;' });
-  const visBgPicker = ce('input', { type: 'color', id: 'vis-bg', value: '#0a0a0a', 'aria-label': 'Visualizer background color', style: 'width:40px;height:30px;padding:0;border:1px solid #444;border-radius:4px;background:transparent;cursor:pointer;' });
-  const visSettingsWrap = ce('div', { style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:8px;border:1px solid #333;' }, [
-    ce('h3', { style: 'margin:0;font-size:1rem;color:var(--focus-color);', text: 'Visualizer Settings' }),
-    ce('div', { style: 'display:flex;gap:10px;align-items:center;' }, [
-      ce('label', { style: 'display:flex;align-items:center;gap:4px;font-size:0.8rem;color:#aaa;' }, [ce('span', { text: 'Color' }), visColorPicker]),
-      ce('label', { style: 'display:flex;align-items:center;gap:4px;font-size:0.8rem;color:#aaa;' }, [ce('span', { text: 'BG' }), visBgPicker])
-    ])
-  ]);
-  if (moScroll) moScroll.insertBefore(visSettingsWrap, moScroll.firstChild);
-  // Apply colors via CSS custom properties so the canvas visualizer can read them
-  visColorPicker.addEventListener('input', () => { document.documentElement.style.setProperty('--vis-color', visColorPicker.value); });
-  visBgPicker.addEventListener('input', () => { document.documentElement.style.setProperty('--vis-bg', visBgPicker.value); });
-
-  /* ------------------------------------------------- CROSSFADE -- */
-  let crossfadeDuration = 0;
-  let crossfadeTimer = null;
-  const crossfadeWrap = ce('div', { style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:6px;border:1px solid #333;' }, [
-    ce('h3', { style: 'margin:0;font-size:1rem;color:var(--focus-color);', text: 'Crossfade' }),
-    ce('label', { style: 'display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#ccc;' }, [
-      ce('input', { type: 'checkbox', id: 'crossfade-toggle', 'aria-label': 'Enable crossfade between tracks' }),
-      ce('span', { text: 'Enabled' })
-    ]),
-    ce('div', { style: 'display:flex;gap:8px;align-items:center;' }, [
-      ce('span', { style: 'font-size:0.85rem;color:#ccc;', text: 'Duration:' }),
-      ce('input', { type: 'range', id: 'crossfade-duration', min: '1', max: '10', step: '0.5', value: '3', 'aria-label': 'Crossfade duration in seconds', style: 'flex:1;' }),
-      ce('span', { id: 'crossfade-dur-val', style: 'font-size:0.85rem;color:var(--focus-color);min-width:30px;', text: '3s' })
-    ])
-  ]);
-  if (moScroll) moScroll.insertBefore(crossfadeWrap, moScroll.firstChild);
-  const crossfadeCb = crossfadeWrap.querySelector('#crossfade-toggle');
-  const crossfadeDur = crossfadeWrap.querySelector('#crossfade-duration');
-  const crossfadeDurVal = crossfadeWrap.querySelector('#crossfade-dur-val');
+  /* ------------------------------------------------- FADE BETWEEN TRACKS -- */
+  // One media element cannot overlap two tracks, so this fades the old track
+  // out over its last seconds and the new one in. It lives on its own gain node
+  // so the user's volume setting is never touched.
+  let crossfadeDuration = 3;
+  const crossfadeCb = document.getElementById('crossfade-toggle');
+  const gaplessCb = document.getElementById('gapless-toggle');
+  const crossfadeDur = ce('input', { type: 'range', id: 'crossfade-duration', min: '1', max: '10', step: '0.5', value: '3', 'aria-label': 'Fade length in seconds', 'aria-valuetext': '3 seconds', style: 'flex:1;' });
+  const crossfadeDurVal = ce('span', { id: 'crossfade-dur-val', style: 'font-size:0.85rem;color:var(--focus-color);min-width:30px;', text: '3s' });
+  crossfadeCb.closest('div[style*="background"]').appendChild(ce('div', { style: 'display:flex;gap:8px;align-items:center;' }, [
+    ce('span', { style: 'font-size:0.85rem;color:#ccc;', text: 'Length:' }), crossfadeDur, crossfadeDurVal
+  ]));
   crossfadeDur.addEventListener('input', () => {
     crossfadeDuration = parseFloat(crossfadeDur.value);
     crossfadeDurVal.textContent = crossfadeDuration + 's';
+    crossfadeDur.setAttribute('aria-valuetext', `${crossfadeDuration} seconds`);
   });
   crossfadeCb.addEventListener('change', () => {
-    announce(`Crossfade ${crossfadeCb.checked ? 'enabled' : 'disabled'}`);
+    if (crossfadeCb.checked && gaplessCb.checked) gaplessCb.checked = false;
+    if (!crossfadeCb.checked && fadingOut) { fadingOut = false; rampFade(1, 0.1); }
+    announce(`Fade between tracks ${crossfadeCb.checked ? 'enabled' : 'disabled'}`);
   });
-  // Patch playNext and the autoplay ended handler to do crossfade
-  const _origPlayNext = playNext;
-  playNext = function () {
-    if (crossfadeCb.checked && crossfadeDuration > 0 && !mediaPlayer.paused && mediaPlayer.volume > 0) {
-      const origVol = mediaPlayer.volume;
-      const steps = 20;
-      let step = 0;
-      const fadeInterval = (crossfadeDuration * 1000) / steps;
-      if (crossfadeTimer) { clearInterval(crossfadeTimer); crossfadeTimer = null; }
-      crossfadeTimer = setInterval(() => {
-        step++;
-        const vol = Math.max(0, origVol * (1 - step / steps));
-        mediaPlayer.volume = vol;
-        if (step >= steps) {
-          clearInterval(crossfadeTimer);
-          crossfadeTimer = null;
-          mediaPlayer.volume = origVol;
-          _origPlayNext();
-          // Fade in the new track
-          mediaPlayer.volume = 0;
-          let inStep = 0;
-          const fadeInTimer = setInterval(() => {
-            inStep++;
-            const vol = Math.min(origVol, origVol * (inStep / steps));
-            mediaPlayer.volume = vol;
-            if (inStep >= steps) { clearInterval(fadeInTimer); mediaPlayer.volume = origVol; }
-          }, fadeInterval);
-        }
-      }, fadeInterval);
-    } else {
-      _origPlayNext();
+  gaplessCb.addEventListener('change', () => {
+    if (gaplessCb.checked && crossfadeCb.checked) { crossfadeCb.checked = false; crossfadeCb.dispatchEvent(new Event('change')); }
+    announce(`Gapless ${gaplessCb.checked ? 'enabled' : 'disabled'}`);
+  });
+  function willAutoAdvance() {
+    if (repeatMode === 'one' || !playlist.length || sleepStopAtEnd) return false;
+    if (!autoplayToggle.checked && repeatMode !== 'all') return false;
+    if (shuffleToggle.checked && playlist.length > 1) return shuffleChoices().length > 0 || repeatMode === 'all';
+    return currentPlaylistIndex < playlist.length - 1 || repeatMode === 'all';
+  }
+  mediaPlayer.addEventListener('timeupdate', () => {
+    const dur = mediaPlayer.duration, cur = mediaPlayer.currentTime;
+    if (!crossfadeCb.checked || fadingOut || mediaPlayer.paused || !isFinite(dur) || abEnd !== null) return;
+    if (dur > crossfadeDuration * 2 && dur - cur <= crossfadeDuration && willAutoAdvance()) {
+      fadingOut = true;
+      rampFade(0, Math.max(0.05, (dur - cur) / mediaPlayer.playbackRate));
     }
-  };
+  });
+  mediaPlayer.addEventListener('seeked', () => {
+    if (fadingOut && mediaPlayer.duration - mediaPlayer.currentTime > crossfadeDuration) { fadingOut = false; rampFade(1, 0.1); }
+  });
+  mediaPlayer.addEventListener('playing', () => {
+    if (!fadeInPending || !fadeNode) return;
+    fadeInPending = false;
+    fadeNode.gain.cancelScheduledValues(audioCtx.currentTime);
+    fadeNode.gain.setValueAtTime(0, audioCtx.currentTime);
+    rampFade(1, crossfadeDuration);
+  });
+
+  /* ---- Gapless: have the next file buffered before it is needed ---- */
+  const nextTrackPreloader = new Audio();
+  nextTrackPreloader.preload = 'auto';
+  nextTrackPreloader.muted = true;
+  let preloadedPath = null;
+  mediaPlayer.addEventListener('timeupdate', () => {
+    const next = playlist[currentPlaylistIndex + 1];
+    if (!gaplessCb.checked || !next || next === preloadedPath || shuffleToggle.checked) return;
+    if (mediaPlayer.duration - mediaPlayer.currentTime < 30) {
+      preloadedPath = next;
+      nextTrackPreloader.src = toMediaSrc(next);
+    }
+  });
+
+  /* ---- Smart pause: stop when the listening device goes away ---- */
+  const smartPauseCb = document.getElementById('smart-pause-toggle');
+  async function listOutputIds() {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter(d => d.kind === 'audiooutput' && d.deviceId !== 'default' && d.deviceId !== 'communications').map(d => d.deviceId);
+  }
+  let knownOutputs = [];
+  listOutputIds().then(ids => { knownOutputs = ids; }).catch(() => {});
+  navigator.mediaDevices.addEventListener('devicechange', async () => {
+    let current;
+    try { current = await listOutputIds(); } catch (e) { return; }
+    const removed = knownOutputs.some(id => !current.includes(id));
+    knownOutputs = current;
+    refreshDevices();
+    if (removed && smartPauseCb.checked && !mediaPlayer.paused) {
+      mediaPlayer.pause();
+      announce('Audio device disconnected. Paused', true);
+      showOSD('Audio device disconnected');
+    }
+  });
 
   /* ------------------------------------------------- VIDEO CONTEXT MENU -- */
   const videoCtxMenu = ce('ul', { role: 'menu', 'aria-label': 'Video context menu', style: 'display:none;position:fixed;z-index:500;background:#222;border:1px solid #444;border-radius:6px;padding:4px;min-width:160px;list-style:none;margin:0;box-shadow:0 4px 16px rgba(0,0,0,0.5);' });
@@ -1788,11 +1334,13 @@
     videoCtxMenu.appendChild(li);
   });
   document.body.appendChild(videoCtxMenu);
+  let videoCtxMenuPrevFocus = null;
   function showVideoCtxMenu(e) {
     e.preventDefault();
+    videoCtxMenuPrevFocus = document.activeElement;
     videoCtxMenu.style.display = 'block';
-    videoCtxMenu.style.left = e.clientX + 'px';
-    videoCtxMenu.style.top = e.clientY + 'px';
+    videoCtxMenu.style.left = Math.min(e.clientX, window.innerWidth - videoCtxMenu.offsetWidth - 8) + 'px';
+    videoCtxMenu.style.top = Math.min(e.clientY, window.innerHeight - videoCtxMenu.offsetHeight - 8) + 'px';
     videoCtxMenu.setAttribute('aria-hidden', 'false');
     const first = videoCtxMenu.querySelector('button');
     if (first) first.focus();
@@ -1806,7 +1354,7 @@
     if (!videoCtxMenu.contains(e.target)) closeVideoCtxMenu();
   });
   videoCtxMenu.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { e.preventDefault(); closeVideoCtxMenu(); }
+    if (e.key === 'Escape') { e.preventDefault(); closeVideoCtxMenu(); if (videoCtxMenuPrevFocus) videoCtxMenuPrevFocus.focus(); }
     if (e.key === 'Tab' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       const btns = Array.from(videoCtxMenu.querySelectorAll('button'));
@@ -1818,57 +1366,6 @@
       btns[next].focus();
     }
   });
-
-  /* ------------------------------------------------- NUMBER KEY SHORTCUTS -- */
-  window.addEventListener('keydown', (e) => {
-    const ae = document.activeElement;
-    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable)) return;
-    if (e.ctrlKey || e.altKey || e.metaKey) return;
-    const num = parseInt(e.key);
-    if (num >= 1 && num <= 9) {
-      e.preventDefault();
-      const bms = getBookmarks();
-      if (bms.length >= num) {
-        const target = bms[num - 1];
-        mediaPlayer.currentTime = target.time;
-        announce(`Jumped to bookmark ${num}: ${formatTime(target.time)}`);
-      } else {
-        announce(`No bookmark ${num}`);
-      }
-    }
-  });
-
-  /* ------------------------------------------------- ENHANCED SEEK TOOLTIP -- */
-  // Add a small thumbnail preview to the seek tooltip when hovering over the progress bar
-  const seekThumb = ce('canvas', { id: 'seek-thumb', 'aria-hidden': 'true',
-    style: 'display:none;position:fixed;z-index:250;border:2px solid var(--focus-color);border-radius:4px;background:#000;width:160px;height:90px;pointer-events:none;' });
-  document.body.appendChild(seekThumb);
-  const seekThumbCtx = seekThumb.getContext('2d');
-  let seekThumbTimer = null;
-  progressSlider.addEventListener('mousemove', (e) => {
-    if (!mediaPlayer.duration || !mediaPlayer.videoWidth) return;
-    const rect = progressSlider.getBoundingClientRect();
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const t = pct * mediaPlayer.duration;
-    // Show thumbnail
-    seekThumb.style.display = 'block';
-    seekThumb.style.left = Math.max(0, Math.min(window.innerWidth - 170, e.clientX - 80)) + 'px';
-    seekThumb.style.top = (rect.top - 100) + 'px';
-    // Capture frame at current time (cache to avoid seeking constantly)
-    if (seekThumbTimer) { clearTimeout(seekThumbTimer); seekThumbTimer = null; }
-    seekThumbTimer = setTimeout(() => {
-      try {
-        seekThumbCtx.drawImage(mediaPlayer, 0, 0, seekThumb.width, seekThumb.height);
-      } catch (e) {}
-    }, 100);
-  });
-  progressSlider.addEventListener('mouseleave', () => { seekThumb.style.display = 'none'; if (seekThumbTimer) { clearTimeout(seekThumbTimer); seekThumbTimer = null; } });
-
-  // Ensure defaults are set
-  if (!document.documentElement.style.getPropertyValue('--vis-color')) document.documentElement.style.setProperty('--vis-color', '#4facfe');
-  if (!document.documentElement.style.getPropertyValue('--vis-bg')) document.documentElement.style.setProperty('--vis-bg', '#0a0a0a');
-
-  // Add more visualizer themes by extending the select
 
   /* ------------------------------------------------- LAUNCH ON STARTUP -- */
   const startupToggle = ce('label', { style: 'display:flex;align-items:center;gap:8px;font-size:0.9rem;color:#ccc;cursor:pointer;margin-top:8px;' }, [
@@ -1888,176 +1385,160 @@
 
   /* ------------------------------------------------- COMMAND PALETTE EXTENSIONS -- */
   COMMANDS.push(
-    { name: 'Set Loop Point A', run: () => { abLoopA = mediaPlayer.currentTime; updateABStatus(); announce(`A set at ${formatTime(abLoopA)}`); } },
-    { name: 'Set Loop Point B', run: () => { abLoopB = mediaPlayer.currentTime; updateABStatus(); announce(`B set at ${formatTime(abLoopB)}`); } },
-    { name: 'Toggle A-B Loop', run: () => { abLoopActive = !abLoopActive; announce(`A-B loop ${abLoopActive ? 'on' : 'off'}`); } },
-    { name: 'Spatial Audio: Wide', run: () => { spatialMode = 'wide'; spatialModeSelect.value = 'wide'; spatialEnabled = true; spatialToggle.checked = true; applySpatial(); announce('Spatial: Stereo Widening'); } },
-    { name: 'Spatial Audio: Surround', run: () => { spatialMode = 'surround'; spatialModeSelect.value = 'surround'; spatialEnabled = true; spatialToggle.checked = true; applySpatial(); announce('Spatial: Surround'); } },
-    { name: 'Spatial Audio: Theater', run: () => { spatialMode = 'theater'; spatialModeSelect.value = 'theater'; spatialEnabled = true; spatialToggle.checked = true; applySpatial(); announce('Spatial: Theater'); } },
-    { name: 'Spatial Audio: Headphone 3D', run: () => { spatialMode = 'headphone'; spatialModeSelect.value = 'headphone'; spatialEnabled = true; spatialToggle.checked = true; applySpatial(); announce('Spatial: Headphone 3D'); } },
-    { name: 'Spatial Audio: Off', run: () => { spatialEnabled = false; spatialToggle.checked = false; applySpatial(); announce('Spatial: Off'); } },
-    { name: 'Media Information', run: openMediaInfo },
-    { name: 'Jump to Current Track', run: () => { if (currentPlaylistIndex >= 0) { const el = document.querySelector('.playlist-item.active'); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus(); } } } },
+    { name: 'Set Loop Point A', run: () => setPointABtn.click() },
+    { name: 'Set Loop Point B', run: () => setPointBBtn.click() },
+    { name: 'Clear A-B Loop', run: () => clearAbLoopBtn.click() },
+    { name: 'Jump to Current Track', run: () => {
+      if (currentPlaylistIndex < 0) return;
+      if (!playlistSidebar.classList.contains('open')) togglePlaylistSidebar();
+      const el = document.querySelector('.playlist-item.playing');
+      if (el) { el.scrollIntoView({ block: 'center' }); el.focus(); }
+    } },
     { name: 'Set as Default Media Player', run: () => ipcRenderer.send('open-default-apps') }
   );
 
   // ---- Drag and drop with visual feedback ----
   const dragOverlay = document.getElementById('drag-overlay');
-  if (dragOverlay) {
-    document.addEventListener('dragenter', (e) => {
-      if (e.dataTransfer.types.includes('Files')) { dragOverlay.style.display = 'flex'; }
-    });
-    document.addEventListener('dragleave', (e) => {
-      if (e.relatedTarget === null || e.relatedTarget === document.body) { dragOverlay.style.display = 'none'; }
-    });
-    document.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); } });
-    document.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dragOverlay.style.display = 'none';
-      const files = Array.from(e.dataTransfer.files).filter(f => {
-        const ext = f.name.split('.').pop().toLowerCase();
-        return ['mp4','mkv','avi','webm','ogv','mp3','wav','ogg','flac','aac','m4a','wma','m4v','3gp','mov','wmv','m3u','m3u8','pls'].includes(ext);
-      });
-      if (files.length === 0) { announce('No supported files found'); return; }
-      files.forEach(f => addToPlaylist(f.path));
-      if (currentPlaylistIndex === -1 && playlist.length > 0) { playPlaylistItem(playlist.length - files.length); }
-      announce(`Added ${files.length} file(s)`);
-    });
-  }
+  const PLAYLIST_EXTS = ['m3u', 'm3u8', 'amp'];
+  const DROP_EXTS = ['mp4','m4v','mkv','mov','webm','ogv','3gp','mp3','wav','ogg','oga','opus','weba','flac','aac','m4a', ...CONVERT_EXTS];
+  const isFileDrag = (e) => e.dataTransfer && e.dataTransfer.types.includes('Files');
+  // dragenter/leave also fire for every child element, so count the depth
+  let dragDepth = 0;
+  document.addEventListener('dragenter', (e) => { if (isFileDrag(e)) { dragDepth++; dragOverlay.classList.add('drag-active'); } });
+  document.addEventListener('dragleave', (e) => { if (isFileDrag(e) && --dragDepth <= 0) { dragDepth = 0; dragOverlay.classList.remove('drag-active'); } });
+  document.addEventListener('dragover', (e) => { e.preventDefault(); });
+  document.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    dragDepth = 0;
+    dragOverlay.classList.remove('drag-active');
+    if (!isFileDrag(e)) return;
+    // File.path was removed in current Electron; webUtils is the replacement
+    const dropped = Array.from(e.dataTransfer.files).map(f => webUtils.getPathForFile(f)).filter(Boolean);
+    const paths = await ipcRenderer.invoke('expand-dropped', dropped); // folders become the media inside them
+    const extOf = (p) => p.split('.').pop().toLowerCase();
+    const media = paths.filter(p => DROP_EXTS.includes(extOf(p)));
+    for (const p of paths.filter(x => PLAYLIST_EXTS.includes(extOf(x)))) {
+      const list = await ipcRenderer.invoke('read-playlist-file', p);
+      if (Array.isArray(list)) media.push(...list);
+    }
+    if (media.length === 0) { announce('No supported files found'); return; }
+    addFilesAndPlay(media);
+    hideHome();
+  });
 
   /* ====================================================================
      FEATURE PACK 3: Debug Console, Shortcuts Customizer, Visual EQ,
      Lyrics, Themes, Accessibility, Normalization Presets
      ==================================================================== */
 
-  /* ------------------------------------------------- DEBUG LOG CONSOLE -- */
-  const MAX_LOGS = 200;
-  const _logs = [];
-  function _captureLog(level, args) {
-    const msg = Array.from(args).map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
-    _logs.push({ level, msg, time: new Date().toLocaleTimeString() });
-    if (_logs.length > MAX_LOGS) _logs.shift();
-  }
-  const _origConsoleLog = console.log;
-  const _origConsoleWarn = console.warn;
-  const _origConsoleError = console.error;
-  console.log = (...args) => { _captureLog('log', args); _origConsoleLog.apply(console, args); };
-  console.warn = (...args) => { _captureLog('warn', args); _origConsoleWarn.apply(console, args); };
-  console.error = (...args) => { _captureLog('error', args); _origConsoleError.apply(console, args); };
-
-  const debugModal = ce('div', { id: 'debug-modal', class: 'modal', 'aria-hidden': 'true', style: 'display:none;z-index:9999;' });
-  const debugContent = ce('div', { class: 'modal-content', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Debug Console', style: 'min-width:600px;max-width:800px;padding:16px;max-height:80vh;display:flex;flex-direction:column;' }, [
-    ce('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;' }, [
-      ce('h2', { style: 'margin:0;font-size:1.1rem;', text: 'Debug Console' }),
-      ce('button', { class: 'icon-btn', 'aria-label': 'Close debug console', html: '<svg viewBox="0 0 24 24" style="width:20px;height:20px;"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>', onclick: closeDebug })
-    ]),
-    ce('div', { style: 'display:flex;gap:6px;margin-bottom:8px;' }, [
-      ce('button', { class: 'action-btn-small', text: 'Clear', 'aria-label': 'Clear logs', onclick: () => { _logs.length = 0; renderDebug(); } }),
-      ce('span', { style: 'flex:1;' }),
-      ce('span', { id: 'debug-count', style: 'font-size:0.8rem;color:#888;' })
-    ]),
-    ce('div', { id: 'debug-list', style: 'flex:1;overflow-y:auto;font-family:monospace;font-size:0.78rem;background:#111;border-radius:4px;padding:8px;border:1px solid #333;line-height:1.5;' })
-  ]);
-  debugModal.appendChild(debugContent);
-  document.getElementById('app-container').appendChild(debugModal);
-  function renderDebug() {
-    const list = document.getElementById('debug-list');
-    const count = document.getElementById('debug-count');
-    if (!list) return;
-    list.innerHTML = _logs.map(l => `<span style="color:${l.level === 'error' ? '#ff5555' : l.level === 'warn' ? '#ffaa00' : '#aaa'}">[${l.time}] ${l.level.toUpperCase()}: ${l.msg}</span>`).join('<br>');
-    list.scrollTop = list.scrollHeight;
-    if (count) count.textContent = `${_logs.length} entries`;
-  }
-  function openDebug() { window._lastModalPrevFocus = document.activeElement; debugModal.style.display = 'flex'; debugModal.setAttribute('aria-hidden', 'false'); renderDebug(); debugModal.querySelector('.icon-btn').focus(); }
-  function closeDebug() { debugModal.style.display = 'none'; debugModal.setAttribute('aria-hidden', 'true'); if (window._lastModalPrevFocus) { window._lastModalPrevFocus.focus(); window._lastModalPrevFocus = null; } }
-  enableModalA11y(debugModal, debugModal.querySelector('.icon-btn'), closeDebug);
-  window.addEventListener('keydown', (e) => {
-    const ae = document.activeElement;
-    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable)) return;
-    if (e.key === '`' && !e.ctrlKey && !e.altKey && !e.metaKey) { e.preventDefault(); openDebug(); }
-  });
-  COMMANDS.push({ name: 'Debug Console', run: openDebug });
-  SHORTCUTS.push(['`', 'Debug Console']);
-
-  /* ------------------------------------------------- VISUAL EQ DISPLAY -- */
-  const eqCanvas = ce('canvas', { id: 'eq-canvas', 'aria-label': 'Equalizer frequency response curve', style: 'width:100%;height:80px;border-radius:4px;background:#111;border:1px solid #333;margin:4px 0;' });
-  const eqCanvasWrap = ce('div', { style: 'margin:8px 0;' }, [eqCanvas]);
-  const eqCanvasSettings = document.getElementById('eq-settings');
-  if (eqCanvasSettings) eqCanvasSettings.insertBefore(eqCanvasWrap, eqCanvasSettings.querySelector('.eq-bands'));
-  function drawEQCurve() {
-    if (!eqCanvas) return;
-    const ctx = eqCanvas.getContext('2d');
-    const rect = eqCanvas.parentElement.getBoundingClientRect();
-    eqCanvas.width = (rect.width || 400) * (window.devicePixelRatio || 1);
-    eqCanvas.height = 80 * (window.devicePixelRatio || 1);
-    ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
-    const w = rect.width || 400;
-    const h = 80;
-    ctx.clearRect(0, 0, w, h);
-    // Background grid
-    ctx.strokeStyle = '#222';
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i <= 4; i++) { const y = (h / 4) * i; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
-    const sliders = document.querySelectorAll('.eq-slider');
-    if (!sliders.length) return;
-    const values = Array.from(sliders).map(s => parseFloat(s.value) / 12);
-    // Draw curve
-    ctx.beginPath();
-    ctx.moveTo(0, h / 2 - values[0] * (h / 2 - 4));
-    for (let i = 0; i < values.length; i++) {
-      const x = (w / (values.length - 1)) * i;
-      const y = h / 2 - values[i] * (h / 2 - 4);
-      ctx.lineTo(x, y);
-    }
-    ctx.strokeStyle = 'var(--focus-color)';
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
-    // Points
-    values.forEach((v, i) => {
-      const x = (w / (values.length - 1)) * i;
-      const y = h / 2 - v * (h / 2 - 4);
-      ctx.beginPath();
-      ctx.arc(x, y, 4, 0, Math.PI * 2);
-      ctx.fillStyle = v > 0 ? '#4caf50' : v < 0 ? '#ff5252' : '#888';
-      ctx.fill();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    });
-  }
-  document.querySelectorAll('.eq-slider').forEach(s => s.addEventListener('input', drawEQCurve));
-  window.addEventListener('resize', drawEQCurve);
-  setTimeout(drawEQCurve, 100);
-
   /* ------------------------------------------------- KEYBOARD SHORTCUT CUSTOMIZER -- */
-  const DEFAULT_SHORTCUTS = {
-    'Play / Pause': 'Space',
-    'Fullscreen': 'F',
-    'Mute': 'M',
-    'Repeat': 'L',
-    'Picture-in-Picture': 'P',
-    'Toggle Playlist': 'Q',
-    'Toggle Bookmarks': 'B',
-    'Add Bookmark': 'Shift+B',
-    'Toggle More Options': 'O',
-    'Settings': 'E',
-    'Screenshot': 'S',
-    'Home': 'Ctrl+H',
-    'Command Palette': 'Ctrl+Shift+P',
-    'Go to Time': 'Ctrl+G',
-    'Open Files': 'Ctrl+O',
-    'Open URL': 'Ctrl+U',
-    'Media Information': 'I',
-    'Debug Console': '`'
-  };
+  function changeVolumeBy(step) {
+    const vol = Math.max(0, Math.min(100, Math.round(mediaPlayer.volume * 100) + step)); // the slider reads 0 while muted
+    volumeSlider.value = vol;
+    volumeSlider.dispatchEvent(new Event('input'));
+    showOSD(`Volume ${vol}%`);
+  }
+  function changeSpeedBy(step) {
+    setPlaybackRate(mediaPlayer.playbackRate + step);
+    showOSD(`Speed ${formatRate(mediaPlayer.playbackRate)}x`);
+    announce(`Speed ${formatRate(mediaPlayer.playbackRate)} times`);
+  }
+
+  function jumpToBookmarkNumber(n) {
+    const bms = getBookmarks();
+    if (bms.length < n) return announce(`No bookmark ${n}`);
+    mediaPlayer.currentTime = bms[n - 1].time;
+    announce(`Jumped to bookmark ${n}: ${formatTime(bms[n - 1].time)}`);
+  }
+  // The one list of shortcuts: it drives the keys, the help screen and the customizer.
+  // "hold" marks the actions that should repeat while the key is held down.
+  const SHORTCUT_TABLE = [
+    ['Play / Pause', 'Ctrl+Space', () => togglePlay()],
+    ['Seek Back 10 Seconds', 'Ctrl+ArrowLeft', () => rewindBtn.click(), 'hold'],
+    ['Seek Forward 10 Seconds', 'Ctrl+ArrowRight', () => forwardBtn.click(), 'hold'],
+    ['Volume Up', 'Ctrl+ArrowUp', () => changeVolumeBy(5), 'hold'],
+    ['Volume Down', 'Ctrl+ArrowDown', () => changeVolumeBy(-5), 'hold'],
+    ['Speed Up', 'Ctrl+Shift+ArrowUp', () => changeSpeedBy(0.1), 'hold'],
+    ['Speed Down', 'Ctrl+Shift+ArrowDown', () => changeSpeedBy(-0.1), 'hold'],
+    ['Speed Up (alternate)', 'Ctrl+=', () => changeSpeedBy(0.1), 'hold'],
+    ['Speed Down (alternate)', 'Ctrl+-', () => changeSpeedBy(-0.1), 'hold'],
+    ['Start Over', 'Ctrl+0', () => { if (hasMedia()) { mediaPlayer.currentTime = 0; announce('Back to the start'); } }],
+    ['Next Chapter', 'Ctrl+Shift+ArrowRight', () => { const i = chapterIndexNow(); goToChapter(i + 1); }],
+    ['Previous Chapter', 'Ctrl+Shift+ArrowLeft', () => { const i = chapterIndexNow(); goToChapter(i - 1); }],
+    ['Speech Boost', 'Ctrl+Shift+S', () => toggleSpeechBoost()],
+    ['Next Track', 'Ctrl+N', () => playNext()],
+    ['Previous Track', 'Ctrl+Shift+N', () => playPrev()],
+    ['Mute', 'Ctrl+M', () => muteBtn.click()],
+    ['Repeat', 'Ctrl+L', () => loopBtn.click()],
+    ['Fullscreen', 'Ctrl+F', () => toggleFullscreen()],
+    ['Picture-in-Picture', 'Ctrl+P', () => pipBtn.click()],
+    ['Say Current Time', 'Ctrl+A', () => sayTime()],
+    ['Say What Is Playing', 'Ctrl+W', () => sayNowPlaying()],
+    ['Cycle Sound Mode', 'Ctrl+D', () => cycleAudioEffect()],
+    ['Toggle Playlist', 'Ctrl+Q', () => togglePlaylistSidebar()],
+    ['Toggle Bookmarks', 'Ctrl+B', () => toggleBookmarksSidebar()],
+    ['Add Bookmark', 'Ctrl+Shift+B', () => addBookmarkAtCurrentTime()],
+    ['Toggle More Options', 'Ctrl+Shift+O', () => toggleMoreOptionsSidebar()],
+    ['Settings', 'Ctrl+E', () => toggleSettingsModal()],
+    ['Screenshot', 'Ctrl+S', () => triggerScreenshot()],
+    ['Subtitles On / Off', 'Ctrl+C', () => toggleSubtitles()],
+    ['Subtitles Earlier', 'Ctrl+[', () => updateSubtitleDelay(-0.5), 'hold'],
+    ['Subtitles Later', 'Ctrl+]', () => updateSubtitleDelay(0.5), 'hold'],
+    ['Always on Top', 'Ctrl+T', () => { alwaysOnTop = !alwaysOnTop; ipcRenderer.send('set-always-on-top', alwaysOnTop); announce('Always on top ' + (alwaysOnTop ? 'on' : 'off')); }],
+    ['Media Information', 'Ctrl+I', () => openMediaInfo()],
+    ['Undo Remove', 'Ctrl+Z', () => undoRemove()],
+    ['Home', 'Ctrl+H', () => showHome()],
+    ['Open Files', 'Ctrl+O', () => openFilesHandler()],
+    ['Open URL', 'Ctrl+U', () => openUrlPrompt()],
+    ['Go to Time', 'Ctrl+G', () => openGotoModal()],
+    ['Command Palette', 'Ctrl+Shift+P', () => openPalette()],
+    ['Help', 'Ctrl+/', () => openHelp()]
+  ];
+  for (let n = 1; n <= 9; n++) SHORTCUT_TABLE.push([`Jump to Bookmark ${n}`, `Ctrl+${n}`, () => jumpToBookmarkNumber(n)]);
+  const DEFAULT_SHORTCUTS = Object.fromEntries(SHORTCUT_TABLE.map(([name, keys]) => [name, keys]));
   let _customShortcuts = loadState('customShortcuts', {});
+  delete _customShortcuts['Debug Console']; // action no longer exists
   function getShortcut(action) { return _customShortcuts[action] || DEFAULT_SHORTCUTS[action] || ''; }
   function saveShortcut(action, key) { _customShortcuts[action] = key; saveState('customShortcuts', _customShortcuts); }
+  let recordingShortcut = false;
+  function shortcutFromEvent(e) {
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.shiftKey && e.key.length > 1 || e.shiftKey && /[a-z]/i.test(e.key)) parts.push('Shift');
+    if (e.altKey) parts.push('Alt');
+    if (e.metaKey) parts.push('Meta');
+    const key = e.key === ' ' ? 'Space' : e.key.length === 1 ? e.key.toUpperCase() : e.key;
+    if (!['Control', 'Shift', 'Alt', 'Meta'].includes(key)) parts.push(key);
+    return parts.join('+');
+  }
+  // Runs last, so anything that already used the key (the queue, a menu, the seek bar) wins
+  window.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented || recordingShortcut || globalKeysBlocked()) return;
+    if (e.key === 'F1') { e.preventDefault(); openHelp(); return; }
+    const combo = shortcutFromEvent(e);
+    const entry = SHORTCUT_TABLE.find(([name]) => getShortcut(name) === combo);
+    if (!entry) return;
+    e.preventDefault();
+    if (e.repeat && entry[3] !== 'hold') return; // holding Ctrl+M must not flicker mute on and off
+    entry[2]();
+  });
+  const shortcutLabel = (keys) => keys.replace('ArrowLeft', 'Left').replace('ArrowRight', 'Right').replace('ArrowUp', 'Up').replace('ArrowDown', 'Down');
+  function renderHelpList() {
+    helpList.innerHTML = '';
+    const rows = [...SHORTCUT_TABLE.map(([name]) => [shortcutLabel(getShortcut(name)), name]), ...FOCUS_KEYS];
+    rows.forEach(([k, d]) => helpList.appendChild(ce('li', { style: 'display:flex;gap:10px;font-size:0.85rem;' }, [
+      ce('kbd', { style: 'background:#333;padding:2px 8px;border-radius:4px;min-width:60px;text-align:center;', text: k }),
+      ce('span', { text: d })
+    ])));
+  }
+  const _openHelpList = openHelp;
+  openHelp = function () { renderHelpList(); _openHelpList(); };
 
   const scPanel = ce('div', { style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:6px;border:1px solid #333;margin-top:10px;' }, [
     ce('h3', { style: 'margin:0;font-size:1rem;color:var(--focus-color);', text: 'Customize Shortcuts' }),
-    ce('p', { style: 'font-size:0.8rem;color:#aaa;margin:0;', text: 'Click a shortcut, then press the new key(s).' }),
-    ce('div', { id: 'shortcut-list', style: 'display:flex;flex-direction:column;gap:3px;max-height:200px;overflow-y:auto;' })
+      ce('p', { style: 'font-size:0.8rem;color:#aaa;margin:0;', text: 'Activate a shortcut, then press the new key(s). Escape cancels.' }),
+    ce('div', { id: 'shortcut-list', style: 'display:flex;flex-direction:column;gap:3px;max-height:200px;overflow-y:auto;' }),
+    ce('button', { class: 'action-btn-small', text: 'Reset All Shortcuts', onclick: () => { _customShortcuts = {}; saveState('customShortcuts', {}); renderShortcuts(); announce('Shortcuts reset to defaults'); } })
   ]);
   const genSettings = document.getElementById('general-settings');
   if (genSettings) genSettings.appendChild(scPanel);
@@ -2079,34 +1560,41 @@
       keyBtn.addEventListener('click', () => {
         if (listening) return;
         listening = true;
+        recordingShortcut = true;
+        announce(`Press the new shortcut for ${action}`);
         keyBtn.textContent = '…';
         keyBtn.style.background = 'var(--focus-color)';
         keyBtn.style.color = '#000';
         const handler = (e) => {
+          if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return; // wait for the real key
           e.preventDefault();
           e.stopPropagation();
-          const parts = [];
-          if (e.ctrlKey) parts.push('Ctrl');
-          if (e.shiftKey) parts.push('Shift');
-          if (e.altKey) parts.push('Alt');
-          if (e.metaKey) parts.push('Meta');
-          const key = e.key === ' ' ? 'Space' : e.key.length === 1 ? e.key.toUpperCase() : e.key;
-          if (!['Control', 'Shift', 'Alt', 'Meta'].includes(key)) parts.push(key);
-          const shortcut = parts.join('+');
-          if (shortcut) {
+          const stopListening = () => {
+            keyBtn.style.background = '';
+            keyBtn.style.color = '';
+            listening = false;
+            recordingShortcut = false;
+            document.removeEventListener('keydown', handler, true);
+          };
+          const shortcut = shortcutFromEvent(e);
+          const usedBy = Object.keys(DEFAULT_SHORTCUTS).find(a => a !== action && getShortcut(a) === shortcut);
+          if (e.key === 'Escape' || e.key === 'Tab') {
+            keyBtn.textContent = getShortcut(action) || '—';
+            announce('Shortcut unchanged');
+          } else if (usedBy) {
+            keyBtn.textContent = getShortcut(action) || '—';
+            announce(`${shortcut} is already used by ${usedBy}. Shortcut unchanged.`, true);
+          } else {
             saveShortcut(action, shortcut);
             keyBtn.textContent = shortcut;
             keyBtn.setAttribute('aria-label', `Shortcut for ${action}: ${shortcut}. Click to change.`);
             announce(`Shortcut for ${action}: ${shortcut}`);
           }
-          keyBtn.style.background = '';
-          keyBtn.style.color = '';
-          listening = false;
-          document.removeEventListener('keydown', handler, true);
+          stopListening();
         };
         document.addEventListener('keydown', handler, true);
-        // Timeout after 5s
-        setTimeout(() => { if (listening) { listening = false; keyBtn.textContent = getShortcut(action) || '—'; keyBtn.style.background = ''; keyBtn.style.color = ''; document.removeEventListener('keydown', handler, true); } }, 5000);
+        // Generous timeout: screen-reader users need time to hear the prompt
+        setTimeout(() => { if (listening) { listening = false; recordingShortcut = false; keyBtn.textContent = getShortcut(action) || '—'; keyBtn.style.background = ''; keyBtn.style.color = ''; document.removeEventListener('keydown', handler, true); announce('Shortcut unchanged'); } }, 15000);
       });
       row.appendChild(keyBtn);
       list.appendChild(row);
@@ -2117,15 +1605,17 @@
   /* ------------------------------------------------- LYRICS PANEL -- */
   let _lyricsCues = [];
   let _lyricsActiveIdx = -1;
-  const lyricsList = ce('ul', { id: 'lyrics-list', 'aria-label': 'Synchronized lyrics', style: 'list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;max-height:240px;overflow-y:auto;font-size:0.9rem;' });
-  const lyricsWrap = ce('div', { style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:8px;border:1px solid #333;' }, [
-    ce('div', { style: 'display:flex;justify-content:space-between;align-items:center;' }, [
-      ce('h3', { style: 'margin:0;font-size:1rem;color:var(--focus-color);', text: 'Lyrics' }),
-      ce('button', { class: 'action-btn-small', text: 'Load .lrc', 'aria-label': 'Load lyrics from LRC file', onclick: loadLyrics })
-    ]),
-    lyricsList
-  ]);
-  if (moScroll) moScroll.insertBefore(lyricsWrap, moScroll.firstChild);
+  const lyricsToggle = document.getElementById('lyrics-toggle');
+  const lyricsDisplay = document.getElementById('lyrics-display');
+  const lyricsList = ce('ul', { id: 'lyrics-list', 'aria-label': 'Synchronized lyrics', style: 'list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;font-size:0.9rem;' });
+  lyricsDisplay.appendChild(lyricsList);
+  lyricsDisplay.parentElement.insertBefore(ce('button', { class: 'action-btn-small', text: 'Load .lrc File', 'aria-label': 'Load lyrics from LRC file', onclick: loadLyrics }), lyricsDisplay);
+  function showLyricsPanel(on) {
+    lyricsToggle.checked = on;
+    lyricsDisplay.style.display = on ? 'block' : 'none';
+  }
+  lyricsToggle.addEventListener('change', () => { showLyricsPanel(lyricsToggle.checked); announce(`Lyrics ${lyricsToggle.checked ? 'shown' : 'hidden'}`); });
+  function clearLyrics() { _lyricsCues = []; _lyricsActiveIdx = -1; renderLyrics(); }
   function loadLyrics() {
     const input = document.createElement('input');
     input.type = 'file';
@@ -2135,83 +1625,68 @@
       if (!file) return;
       const reader = new FileReader();
       reader.onload = (ev) => {
-        const text = ev.target.result;
-        parseLRC(text);
+        parseLRC(decodeText(ev.target.result));
+        showLyricsPanel(true);
       };
-      reader.readAsText(file);
+      reader.readAsArrayBuffer(file);
     };
     input.click();
   }
-  function parseLRC(text) {
+  function parseLRC(text, silent) {
     _lyricsCues = [];
-    const lines = text.split('\n');
-    const timeRegex = /\[(\d{2}):(\d{2})[.:](\d{2,3})\]/;
-    lines.forEach(line => {
-      const match = timeRegex.exec(line);
-      if (match) {
-        const min = parseInt(match[1]);
-        const sec = parseInt(match[2]);
-        const ms = parseInt(match[3]) * (match[3].length === 2 ? 10 : 1);
-        const time = min * 60 + sec + ms / 1000;
-        const text = line.replace(timeRegex, '').trim();
-        if (text) _lyricsCues.push({ time, text });
+    _lyricsActiveIdx = -1;
+    // A line can carry several timestamps when a chorus repeats
+    const stamp = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+    text.split(/\r?\n/).forEach(line => {
+      const words = line.replace(stamp, '').trim();
+      if (!words) return;
+      for (const m of line.matchAll(stamp)) {
+        const fraction = m[3] ? parseInt(m[3].padEnd(3, '0'), 10) / 1000 : 0;
+        _lyricsCues.push({ time: parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + fraction, text: words });
       }
     });
     _lyricsCues.sort((a, b) => a.time - b.time);
     renderLyrics();
-    announce(`Loaded ${_lyricsCues.length} lyrics lines`);
+    if (!silent) announce(`Loaded ${_lyricsCues.length} lyrics lines`);
   }
   function renderLyrics() {
     lyricsList.innerHTML = '';
-    if (!_lyricsCues.length) { lyricsList.innerHTML = '<li style="color:#888;padding:8px;font-size:0.85rem;">No lyrics loaded. Click "Load .lrc" to load a lyrics file.</li>'; return; }
-    _lyricsCues.forEach((c, i) => {
-      const li = ce('li', { class: 'lyrics-line', tabIndex: 0, 'aria-label': c.text }, [ce('span', { text: c.text })]);
-      li.addEventListener('click', () => { mediaPlayer.currentTime = c.time; announce(`Jumped to ${formatTime(c.time)}`); });
-      li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); mediaPlayer.currentTime = c.time; announce(`Jumped to ${formatTime(c.time)}`); } });
-      if (i === _lyricsActiveIdx) { li.style.color = 'var(--focus-color)'; li.style.fontWeight = 'bold'; li.scrollIntoView({ block: 'center' }); }
+    if (!_lyricsCues.length) { lyricsList.appendChild(ce('li', { style: 'color:#888;padding:8px;font-size:0.85rem;', text: 'No lyrics loaded. A .lrc file with the same name as the track loads automatically.' })); return; }
+    _lyricsCues.forEach((c) => {
+      const jump = () => { mediaPlayer.currentTime = c.time; announce(`Jumped to ${formatTime(c.time)}`); };
+      const li = ce('li', { class: 'lyrics-line', tabindex: '0', role: 'button', 'aria-label': `${c.text}, at ${formatTime(c.time)}`, text: c.text, onclick: jump });
+      li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jump(); } });
       lyricsList.appendChild(li);
     });
   }
+  renderLyrics();
+  // Only move the highlight: rebuilding the list would knock keyboard focus out of it
   mediaPlayer.addEventListener('timeupdate', () => {
     if (!_lyricsCues.length) return;
     let newIdx = -1;
     for (let i = _lyricsCues.length - 1; i >= 0; i--) {
       if (mediaPlayer.currentTime >= _lyricsCues[i].time) { newIdx = i; break; }
     }
-    if (newIdx !== _lyricsActiveIdx) { _lyricsActiveIdx = newIdx; renderLyrics(); }
+    if (newIdx === _lyricsActiveIdx) return;
+    const items = lyricsList.children;
+    if (items[_lyricsActiveIdx]) items[_lyricsActiveIdx].classList.remove('current');
+    _lyricsActiveIdx = newIdx;
+    const line = items[newIdx];
+    if (line) {
+      line.classList.add('current');
+      lyricsDisplay.scrollTop = line.offsetTop - lyricsDisplay.clientHeight / 2;
+    }
   });
-
-  /* ------------------------------------------------- CUSTOM THEMES -- */
-  const themeSelect = document.getElementById('theme-select');
-  if (themeSelect) {
-    const extraThemes = [
-      ['highcontrast', 'High Contrast'],
-      ['sepia', 'Sepia'],
-      ['retro', 'Retro Terminal']
-    ];
-    extraThemes.forEach(([v, t]) => {
-      if (!Array.from(themeSelect.options).some(o => o.value === v)) themeSelect.appendChild(ce('option', { value: v, text: t }));
-    });
-    themeSelect.addEventListener('change', () => {
-      const v = themeSelect.value;
-      document.documentElement.setAttribute('data-theme', v);
-      saveState('theme', v);
-      announce(`Theme: ${themeSelect.options[themeSelect.selectedIndex].text}`);
-    });
-  }
 
   /* ------------------------------------------------- ACCESSIBILITY IMPROVEMENTS -- */
   // Ensure the skip link works and add a second skip to playlist
-  const skipToPlaylist = ce('a', { href: '#playlist-sidebar', class: 'sr-only', text: 'Skip to playlist',
-    onclick: (e) => { e.preventDefault(); playlistSidebar.setAttribute('tabindex', '-1'); playlistSidebar.focus(); } });
+  const skipToPlaylist = ce('a', { href: '#playlist-sidebar', class: 'sr-only skip-link', text: 'Skip to playlist',
+    onclick: (e) => { e.preventDefault(); if (!playlistSidebar.classList.contains('open')) togglePlaylistSidebar(); } });
   document.getElementById('app-container').insertBefore(skipToPlaylist, document.getElementById('app-container').firstChild.nextSibling);
 
   // Add aria-labels to all sidebar toggles and major controls that lack them
   document.querySelectorAll('.sidebar-toggle').forEach(el => { if (!el.getAttribute('aria-label')) el.setAttribute('aria-label', el.title || el.textContent.trim() || 'Toggle sidebar'); });
 
-  // Add role="status" to OSD
-  osd.setAttribute('role', 'status');
-  osd.setAttribute('aria-live', 'polite');
 
   // Ensure the progress slider describes the keyboard interaction every time
   if (!document.getElementById('progress-help')) {
@@ -2255,11 +1730,32 @@
     normPresetSelect
   ]);
   const audioSettingsEl = document.getElementById('audio-settings');
-  if (audioSettingsEl) audioSettingsEl.appendChild(normPresetWrap);
 
+
+  const normalizerToggle = document.getElementById('normalizer-toggle');
+  const normalizerButtons = { light: 'normalizer-preset-soft', medium: 'normalizer-preset-medium', strong: 'normalizer-preset-hard' };
+  function syncNormalizerUI() {
+    const val = normPresetSelect.value;
+    normalizationOn = val !== 'off';
+    normalizerToggle.checked = normalizationOn;
+    Object.keys(normalizerButtons).forEach(p => document.getElementById(normalizerButtons[p]).setAttribute('aria-pressed', p === val ? 'true' : 'false'));
+
+    saveState('normPreset', val);
+  }
+  normalizerToggle.addEventListener('change', () => {
+    normPresetSelect.value = normalizerToggle.checked ? (loadState('normPresetLast', 'medium')) : 'off';
+    normPresetSelect.dispatchEvent(new Event('change'));
+  });
+  Object.keys(normalizerButtons).forEach(p => document.getElementById(normalizerButtons[p]).addEventListener('click', () => {
+    normPresetSelect.value = p;
+    normPresetSelect.dispatchEvent(new Event('change'));
+  }));
   normPresetSelect.addEventListener('change', () => {
     const val = normPresetSelect.value;
-    if (!normalizationNode) { announce('Load media first to change normalization'); return; }
+    initAudio();
+    if (!normalizationNode) { announce('Audio is not available'); return; }
+    if (val !== 'off') saveState('normPresetLast', val);
+    syncNormalizerUI();
     switch (val) {
       case 'off':
         normalizationNode.threshold.value = 0;
@@ -2306,9 +1802,10 @@
   if (normalizationOn !== undefined) {
     const _origSetNorm = setNormalization;
     setNormalization = function(on) {
+      initAudio();
       _origSetNorm(on);
-      if (on && normPresetSelect.value === 'off') { normPresetSelect.value = 'medium'; normPresetSelect.dispatchEvent(new Event('change')); }
-      if (!on) normPresetSelect.value = 'off';
+      if (on && normPresetSelect.value === 'off') { normPresetSelect.value = loadState('normPresetLast', 'medium'); normPresetSelect.dispatchEvent(new Event('change')); }
+      if (!on) { normPresetSelect.value = 'off'; syncNormalizerUI(); }
     };
   }
 
@@ -2316,49 +1813,8 @@
      FEATURE PACK 4: Search, Keys, Time Toggle, Frame Advance, Sort, Boost, Media Session
      ==================================================================== */
 
-  /* ------------------------------------------------- KEYBOARD: VOLUME + SPEED + FRAME ADVANCE -- */
-  // Up/Down: volume; +/-: speed; Period: frame advance
-  window.addEventListener('keydown', (e) => {
-    const ae = document.activeElement;
-    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable)) return;
-    if (e.key === 'ArrowUp' && !e.ctrlKey && !e.altKey && !e.metaKey) {
-      e.preventDefault();
-      const vol = Math.min(100, (parseFloat(volumeSlider.value) || 50) + 5);
-      volumeSlider.value = vol;
-      volumeSlider.dispatchEvent(new Event('input'));
-      showOSD(`Volume ${Math.round(vol)}%`);
-      announce(`Volume ${Math.round(vol)}%`);
-    } else if (e.key === 'ArrowDown' && !e.ctrlKey && !e.altKey && !e.metaKey) {
-      e.preventDefault();
-      const vol = Math.max(0, (parseFloat(volumeSlider.value) || 50) - 5);
-      volumeSlider.value = vol;
-      volumeSlider.dispatchEvent(new Event('input'));
-      showOSD(`Volume ${Math.round(vol)}%`);
-      announce(`Volume ${Math.round(vol)}%`);
-    } else if (e.key === '=' || e.key === '+') {
-      e.preventDefault();
-      const speedVal = parseFloat(mediaPlayer.playbackRate) || 1;
-      const newSpeed = Math.min(4, Math.round((speedVal + 0.1) * 100) / 100);
-      mediaPlayer.playbackRate = newSpeed;
-      speedBtn.textContent = `${newSpeed.toFixed(2)}x`;
-      showOSD(`Speed ${newSpeed.toFixed(2)}x`);
-      announce(`Speed ${newSpeed.toFixed(2)}x`);
-    } else if (e.key === '-' && !e.ctrlKey && !e.altKey && !e.metaKey) {
-      e.preventDefault();
-      const speedVal = parseFloat(mediaPlayer.playbackRate) || 1;
-      const newSpeed = Math.max(0.1, Math.round((speedVal - 0.1) * 100) / 100);
-      mediaPlayer.playbackRate = newSpeed;
-      speedBtn.textContent = `${newSpeed.toFixed(2)}x`;
-      showOSD(`Speed ${newSpeed.toFixed(2)}x`);
-      announce(`Speed ${newSpeed.toFixed(2)}x`);
-    } else if (e.key === '.' && !e.ctrlKey && !e.altKey && !e.metaKey && mediaPlayer.paused) {
-      e.preventDefault();
-      mediaPlayer.currentTime = Math.min(mediaPlayer.duration || Infinity, (mediaPlayer.currentTime || 0) + 0.04);
-    }
-  });
-
   /* ------------------------------------------------- REMAINING TIME TOGGLE -- */
-  let _showRemaining = false;
+
   const timeDisplay = document.getElementById('time-display');
   if (timeDisplay) {
     timeDisplay.style.cursor = 'pointer';
@@ -2366,54 +1822,18 @@
     timeDisplay.setAttribute('tabindex', '0');
     timeDisplay.setAttribute('aria-label', 'Click to toggle elapsed/remaining time');
     timeDisplay.addEventListener('click', () => {
-      _showRemaining = !_showRemaining;
-      timeDisplay.setAttribute('aria-label', `Showing ${_showRemaining ? 'remaining' : 'elapsed'} time. Click to toggle.`);
-      announce(`${_showRemaining ? 'Remaining' : 'Elapsed'} time`);
+      showRemainingTime = !showRemainingTime;
+      updateProgressUI(false);
+      timeDisplay.setAttribute('aria-label', `Showing ${showRemainingTime ? 'remaining' : 'elapsed'} time. Click to toggle.`);
+      announce(`${showRemainingTime ? 'Remaining' : 'Elapsed'} time`);
     });
     timeDisplay.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); timeDisplay.click(); } });
-    // Override the time update to show remaining
-    mediaPlayer.addEventListener('timeupdate', () => {
-      if (!_showRemaining || !timeDisplay) return;
-      const cur = mediaPlayer.currentTime || 0;
-      const dur = mediaPlayer.duration || 0;
-      if (dur) {
-        const rem = Math.max(0, dur - cur);
-        timeDisplay.textContent = `-${formatTime(rem)}`;
-      }
-    });
   }
-
-  /* ------------------------------------------------- VOLUME BOOST TOGGLE -- */
-  let _boostOn = false;
-  let _savedBoostGain = 1;
-  const boostBtn = ce('button', {
-    class: 'action-btn-small',
-    'aria-label': 'Toggle volume boost 200%',
-    'aria-pressed': 'false',
-    style: 'margin-left:4px;',
-    text: 'Boost',
-    onclick: () => {
-      _boostOn = !_boostOn;
-      boostBtn.setAttribute('aria-pressed', _boostOn);
-      boostBtn.style.color = _boostOn ? 'var(--focus-color)' : '';
-      announce(`Volume boost ${_boostOn ? '200%' : 'off'}`);
-      if (gainNode) {
-        if (_boostOn) {
-          _savedBoostGain = gainNode.gain.value;
-          gainNode.gain.value = Math.min(2, _savedBoostGain * 2);
-        } else {
-          gainNode.gain.value = _savedBoostGain;
-        }
-      }
-    }
-  });
-  const volContainer = volumeSlider?.parentElement;
-  if (volContainer) volContainer.appendChild(boostBtn);
 
   /* ------------------------------------------------- PLAYLIST SORT -- */
   const sortWrap = ce('div', { style: 'display:flex;gap:4px;padding:4px 8px;border-bottom:1px solid #333;' });
   const sortNameBtn = ce('button', { class: 'action-btn-small', 'aria-label': 'Sort by name', text: 'Name', onclick: () => { sortPlaylist('name'); } });
-  const sortDateBtn = ce('button', { class: 'action-btn-small', 'aria-label': 'Sort by date added', text: 'Date', onclick: () => { sortPlaylist('date'); } });
+  const sortDateBtn = ce('button', { class: 'action-btn-small', 'aria-label': 'Sort by date modified, newest first', text: 'Date', onclick: () => { sortPlaylist('date'); } });
   const sortDurBtn = ce('button', { class: 'action-btn-small', 'aria-label': 'Sort by duration', text: 'Duration', onclick: () => { sortPlaylist('duration'); } });
   const sortRevBtn = ce('button', { class: 'action-btn-small', 'aria-label': 'Reverse order', text: 'Reverse', onclick: () => { sortPlaylist('reverse'); } });
   sortWrap.append(sortNameBtn, sortDateBtn, sortDurBtn, sortRevBtn);
@@ -2422,79 +1842,52 @@
   if (playlistItemsEl && playlistItemsEl.parentElement) {
     playlistItemsEl.parentElement.insertBefore(sortWrap, playlistItemsEl);
   }
-  function sortPlaylist(mode) {
+  async function sortPlaylist(mode) {
     if (!playlist.length) return;
     const currentFile = currentPlaylistIndex >= 0 ? playlist[currentPlaylistIndex] : null;
     if (mode === 'name') {
-      const idxMap = playlist.map((p, i) => i).sort((a, b) => getFileName(playlist[a]).localeCompare(getFileName(playlist[b])));
-      playlist = idxMap.map(i => playlist[i]);
+      playlist.sort((a, b) => getFileName(a).localeCompare(getFileName(b), undefined, { numeric: true, sensitivity: 'base' })); // "2" before "10"
     } else if (mode === 'date') {
-      // Already in insertion order — reverse it so newest first
-      playlist.reverse();
+      const times = await ipcRenderer.invoke('file-mtimes', playlist.filter(p => !isUrl(p)));
+      playlist.sort((a, b) => (times[b] || 0) - (times[a] || 0));
     } else if (mode === 'reverse') {
       playlist.reverse();
     } else if (mode === 'duration') {
-      // Sort by file name as proxy since we don't have durations stored
-      playlist.sort((a, b) => getFileName(a).localeCompare(getFileName(b)));
-      // Then reverse so longest names first (weak proxy for duration)
+      // Known once a track has been played; unknown lengths go last
+      const durs = loadState('durations', {});
+      const len = (p) => { const d = durs[normalizePath(p)]; return typeof d === 'number' ? d : Infinity; };
+      playlist.sort((a, b) => len(a) - len(b));
     }
     if (currentFile) currentPlaylistIndex = playlist.indexOf(currentFile);
-    if (currentPlaylistIndex === -1 && playlist.length) currentPlaylistIndex = 0;
     renderPlaylist();
     announce(`Playlist sorted by ${mode}`);
   }
-
-  /* ------------------------------------------------- PLAYLIST RIGHT-CLICK ENHANCEMENTS -- */
-  // The existing right-click on playlist items already has Play Next and Remove.
-  // We extend the context menu by patching the menu creation.
-  const _origShowPlaylistMenu = window.showPlaylistMenu;
-  document.getElementById('playlist-items')?.addEventListener('contextmenu', (e) => {
-    const li = e.target.closest('.playlist-item');
-    if (!li) return;
-    const idx = Array.from(li.parentNode.children).indexOf(li);
-    if (idx < 0 || idx >= playlist.length) return;
-    e.preventDefault();
-    const menu = ce('div', { class: 'context-menu', role: 'menu', 'aria-label': 'Playlist item actions', style: 'position:fixed;left:' + e.clientX + 'px;top:' + e.clientY + 'px;z-index:9999;background:#252525;border:1px solid #444;border-radius:6px;padding:4px;min-width:180px;box-shadow:0 4px 16px rgba(0,0,0,0.5);' });
-    const items = [
-      { label: 'Play', run: () => playPlaylistItem(idx) },
-      { label: 'Play Next', run: () => playNextAfter(idx) },
-      { label: 'Remove', run: () => { lastRemoved = { item: playlist[idx], index: idx }; playlist.splice(idx, 1); if (currentPlaylistIndex > idx) currentPlaylistIndex--; renderPlaylist(); showUndo(); } },
-      { label: 'Copy Path', run: () => { navigator.clipboard.writeText(playlist[idx]); announce('Path copied'); } },
-      { label: 'Reveal in Explorer', run: () => { ipcRenderer.send('open-external', playlist[idx]); } },
-    ];
-    items.forEach((item, i) => {
-      const btn = ce('button', { class: 'context-menu-item', role: 'menuitem', text: item.label, style: 'display:block;width:100%;text-align:left;background:none;border:none;color:#ccc;padding:6px 12px;border-radius:4px;font-size:0.85rem;', onclick: () => { menu.remove(); if (item.run) item.run(); } });
-      btn.addEventListener('mouseenter', () => btn.style.background = '#333');
-      btn.addEventListener('mouseleave', () => btn.style.background = '');
-      menu.appendChild(btn);
-      if (i === 0) setTimeout(() => btn.focus(), 0);
-    });
-    document.body.appendChild(menu);
-    // Close on click outside
-    const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); document.removeEventListener('contextmenu', close); } };
-    setTimeout(() => { document.addEventListener('click', close); document.addEventListener('contextmenu', close); }, 0);
-    // ESC to close
-    const escHandler = (ev) => { if (ev.key === 'Escape') { menu.remove(); document.removeEventListener('keydown', escHandler); } };
-    document.addEventListener('keydown', escHandler);
-  });
 
   /* ------------------------------------------------- MEDIA SESSION API -- */
   if ('mediaSession' in navigator) {
     const updateMediaSession = () => {
       navigator.mediaSession.metadata = new MediaMetadata({
-        title: getFileName(playlist[currentPlaylistIndex] || ''),
-artist: 'Accessible Media Player',
-    album: 'Accessible Media Player'
+        title: getFileName(currentFilePath || ''),
+        artist: 'Accessible Media Player',
+        album: 'Accessible Media Player'
       });
     };
     mediaPlayer.addEventListener('loadedmetadata', updateMediaSession);
     mediaPlayer.addEventListener('play', () => { navigator.mediaSession.playbackState = 'playing'; });
     mediaPlayer.addEventListener('pause', () => { navigator.mediaSession.playbackState = 'paused'; });
-    navigator.mediaSession.setActionHandler('play', () => mediaPlayer.play());
+    navigator.mediaSession.setActionHandler('play', () => { if (mediaPlayer.paused) togglePlay(); });
     navigator.mediaSession.setActionHandler('pause', () => mediaPlayer.pause());
     navigator.mediaSession.setActionHandler('previoustrack', () => { if (typeof playPrev === 'function') playPrev(); });
     navigator.mediaSession.setActionHandler('nexttrack', () => { if (typeof playNext === 'function') playNext(); });
-    navigator.mediaSession.setActionHandler('seekto', (details) => { if (details.seekTime) mediaPlayer.currentTime = details.seekTime; });
+    navigator.mediaSession.setActionHandler('seekbackward', () => seekBy(-10));
+    navigator.mediaSession.setActionHandler('seekforward', () => seekBy(10));
+    const updatePosition = () => {
+      if (isFinite(mediaPlayer.duration) && mediaPlayer.duration > 0) {
+        navigator.mediaSession.setPositionState({ duration: mediaPlayer.duration, playbackRate: mediaPlayer.playbackRate, position: Math.min(mediaPlayer.currentTime, mediaPlayer.duration) });
+      }
+    };
+    ['loadedmetadata', 'seeked', 'ratechange', 'play', 'pause'].forEach(ev => mediaPlayer.addEventListener(ev, updatePosition));
+    navigator.mediaSession.setActionHandler('seekto', (details) => { if (details.seekTime != null) mediaPlayer.currentTime = details.seekTime; });
   }
 
   /* ------------------------------------------------- SHUFFLE UI ENHANCEMENT -- */
@@ -2510,15 +1903,13 @@ artist: 'Accessible Media Player',
   /* ------------------------------------------------- COMMANDS FOR NEW FEATURES -- */
   COMMANDS.push(
     { name: 'Toggle Remaining Time', run: () => { if (timeDisplay) timeDisplay.click(); } },
-    { name: 'Toggle Volume Boost', run: () => { if (boostBtn) boostBtn.click(); } },
+
     { name: 'Sort Playlist A-Z', run: () => sortPlaylist('name') },
     { name: 'Reverse Playlist', run: () => sortPlaylist('reverse') },
-    { name: 'Reset Video Transform', run: resetVideoTransform },
-    { name: 'Reset Video Filters', run: resetVideoFilters },
+
     { name: 'Export Playlist M3U', run: exportPlaylistM3U },
-    { name: 'Clear Playlist', run: clearPlaylist },
-    { name: 'Playback Statistics', run: showPlaybackStats },
-    { name: 'Screenshot with Timestamp', run: screenshotWithTimestamp },
+    { name: 'Clear Playlist', run: () => clearPlaylistBtn.click() },
+
   );
 
   /* ==================================================================
@@ -2526,187 +1917,13 @@ artist: 'Accessible Media Player',
      Stats, Background, Screenshot, Playlist Tools
      ================================================================== */
 
-  /* ------------------------------------------------- VIDEO FILTER PRESETS -- */
-  const filterPresetWrap = ce('div', { style: 'display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;' });
-  const filterPresets = [
-    { label: 'Normal', vals: { b:100, c:100, s:100, h:0, bl:0 } },
-    { label: 'Vivid', vals: { b:110, c:130, s:150, h:0, bl:0 } },
-    { label: 'Vintage', vals: { b:90, c:80, s:70, h:15, bl:0 } },
-    { label: 'Noir', vals: { b:70, c:50, s:0, h:0, bl:0 } },
-    { label: 'Soft', vals: { b:105, c:95, s:90, h:0, bl:1 } },
-  ];
-  filterPresets.forEach(p => {
-    const btn = ce('button', { class: 'action-btn-small', text: p.label, 'aria-label': `Apply ${p.label} video filter`, style: 'font-size:0.7rem;padding:2px 6px;', onclick: () => applyFilterPreset(p.vals) });
-    filterPresetWrap.appendChild(btn);
-  });
-  function applyFilterPreset(vals) {
-    const bS = document.getElementById('brightness-slider');
-    const cS = document.getElementById('contrast-slider');
-    const sS = document.getElementById('saturation-slider');
-    const hS = document.getElementById('hue-slider');
-    const blS = document.getElementById('blur-slider');
-    if (bS) { bS.value = vals.b; bS.dispatchEvent(new Event('input')); }
-    if (cS) { cS.value = vals.c; cS.dispatchEvent(new Event('input')); }
-    if (sS) { sS.value = vals.s; sS.dispatchEvent(new Event('input')); }
-    if (hS) { hS.value = vals.h; hS.dispatchEvent(new Event('input')); }
-    if (blS) { blS.value = vals.bl; blS.dispatchEvent(new Event('input')); }
-    announce(`Filter: ${Object.keys(filterPresets).find(k => filterPresets[k].vals === vals) || 'custom'}`);
-  }
-  function resetVideoFilters() { applyFilterPreset({ b:100, c:100, s:100, h:0, bl:0 }); announce('Video filters reset'); }
-  // Insert filter presets near the video filter controls
-  const vidFilterSection = document.getElementById('brightness-slider')?.closest('div[style*="margin-top"]') || document.querySelector('#more-options-sidebar div[style*="margin-top"]');
-  if (vidFilterSection && vidFilterSection.parentElement) { vidFilterSection.parentElement.insertBefore(filterPresetWrap, vidFilterSection.nextSibling); }
-
   /* ------------------------------------------------- EXPORT PLAYLIST TO M3U -- */
   function exportPlaylistM3U() {
     if (!playlist.length) { announce('Playlist empty'); return; }
-    let m3u = '#EXTM3U\n# Accessible Media Player Playlist\n';
-    const name = getFileName(playlist[0] || 'playlist');
-    playlist.forEach(p => { const fn = getFileName(p); m3u += `#EXTINF:-1,${fn}\n${p}\n`; });
-    const blob = new Blob([m3u], { type: 'audio/x-mpegurl;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `${name.replace(/\.[^.]+$/, '')}_playlist.m3u`; a.click();
-    URL.revokeObjectURL(url);
-    announce(`Playlist exported as M3U (${playlist.length} tracks)`);
+    ipcRenderer.invoke('save-m3u', playlist).then(ok => announce(ok ? `Exported ${playlist.length} tracks as M3U` : 'Export cancelled'));
   }
 
-  /* ------------------------------------------------- AUTO-RESTORE PLAYLIST -- */
-  window.addEventListener('beforeunload', () => {
-    saveState('savedPlaylist', JSON.stringify({ files: playlist, index: currentPlaylistIndex }));
-  });
-  // Restore on load (if no resume)
-  (function restorePlaylist() {
-    const saved = loadState('savedPlaylist', null);
-    if (saved && !mediaPlayer.src) {
-      try {
-        const data = JSON.parse(saved);
-        if (Array.isArray(data.files) && data.files.length) {
-          data.files.forEach(f => addToPlaylist(f));
-          if (data.index >= 0 && data.index < playlist.length) { currentPlaylistIndex = data.index; }
-          renderPlaylist();
-        }
-      } catch(e) { /* ignore corrupt data */ }
-    }
-  })();
-
-  /* ------------------------------------------------- CTRL+R RESET VIDEO TRANSFORM -- */
-  function resetVideoTransform() {
-    videoZoom = 1; videoRotation = 0; flipH = false; flipV = false;
-    applyVideoTransform();
-    announce('Video transform reset');
-  }
-  window.addEventListener('keydown', (e) => {
-    if (e.ctrlKey && e.key === 'r' && !e.shiftKey && !e.altKey && !e.metaKey) {
-      const ae = document.activeElement;
-      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable)) return;
-      e.preventDefault();
-      resetVideoTransform();
-    }
-  });
-
-  /* ------------------------------------------------- QUICK VOLUME PRESETS -- */
-  const volPresetWrap = ce('div', { style: 'display:flex;gap:3px;margin-top:4px;' });
-  [25, 50, 75, 100].forEach(pct => {
-    const btn = ce('button', { class: 'action-btn-small', text: `${pct}%`, 'aria-label': `Set volume to ${pct} percent`, style: 'font-size:0.7rem;padding:2px 6px;flex:1;', onclick: () => {
-      volumeSlider.value = pct;
-      volumeSlider.dispatchEvent(new Event('input'));
-      showOSD(`Volume ${pct}%`);
-      announce(`Volume ${pct}%`);
-    }});
-    volPresetWrap.appendChild(btn);
-  });
-  const volContainer2 = volumeSlider?.parentElement;
-  if (volContainer2) volContainer2.appendChild(volPresetWrap);
-
-  /* ------------------------------------------------- CUSTOM BACKGROUND IMAGE -- */
-  const bgInput = ce('input', { type: 'text', id: 'bg-url-input', placeholder: 'Background image URL…', 'aria-label': 'Custom background image URL', style: 'flex:1;background:#2a2a2a;color:#fff;border:1px solid #444;padding:4px 6px;border-radius:3px;font-size:0.8rem;' });
-  const bgApply = ce('button', { class: 'action-btn-small', text: 'Set BG', 'aria-label': 'Apply background image', onclick: () => {
-    const url = bgInput.value.trim();
-    if (!url) { localStorage.removeItem('customBg'); document.body.style.backgroundImage = ''; announce('Background cleared'); return; }
-    localStorage.setItem('customBg', url);
-    document.body.style.backgroundImage = `url('${url}')`;
-    document.body.style.backgroundSize = 'cover';
-    document.body.style.backgroundPosition = 'center';
-    announce('Background set');
-  }});
-  const bgClear = ce('button', { class: 'action-btn-small', text: 'Clear', 'aria-label': 'Clear background image', onclick: () => { bgInput.value = ''; localStorage.removeItem('customBg'); document.body.style.backgroundImage = ''; announce('Background cleared'); } });
-  const bgRow = ce('div', { style: 'display:flex;gap:4px;align-items:center;padding:8px;margin-top:6px;background:#252525;border-radius:6px;border:1px solid #333;' }, [
-    ce('span', { style: 'color:#aaa;font-size:0.8rem;white-space:nowrap;', text: 'BG:' }),
-    bgInput, bgApply, bgClear
-  ]);
-  // Restore saved bg
-  const savedBg = localStorage.getItem('customBg');
-  if (savedBg) { document.body.style.backgroundImage = `url('${savedBg}')`; document.body.style.backgroundSize = 'cover'; document.body.style.backgroundPosition = 'center'; bgInput.value = savedBg; }
   const genSettings2 = document.getElementById('general-settings');
-  if (genSettings2) genSettings2.appendChild(bgRow);
-
-  /* ------------------------------------------------- SCREENSHOT WITH TIMESTAMP -- */
-  function screenshotWithTimestamp() {
-    if (!mediaPlayer.videoWidth) { announce('No video to capture'); return; }
-    const now = new Date();
-    const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
-    const canvas = document.createElement('canvas');
-    canvas.width = mediaPlayer.videoWidth;
-    canvas.height = mediaPlayer.videoHeight;
-    canvas.getContext('2d').drawImage(mediaPlayer, 0, 0);
-    canvas.toBlob(blob => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `Accessible_${ts}.png`; a.click();
-      URL.revokeObjectURL(url);
-      announce(`Screenshot saved as Accessible_${ts}.png`);
-    }, 'image/png');
-  }
-
-  /* ------------------------------------------------- PLAYBACK STATS -- */
-  let _stats = { launches: 0, tracksPlayed: 0, totalTimeMs: 0, lastDate: '' };
-  try { const s = localStorage.getItem('playbackStats'); if (s) _stats = JSON.parse(s); } catch(e) {}
-  if (!_stats.lastDate || _stats.lastDate !== new Date().toDateString()) {
-    _stats.launches++;
-    _stats.lastDate = new Date().toDateString();
-    localStorage.setItem('playbackStats', JSON.stringify(_stats));
-  }
-  mediaPlayer.addEventListener('timeupdate', () => {
-    if (!mediaPlayer.paused) { _stats.totalTimeMs += 500; }
-  });
-  setInterval(() => { localStorage.setItem('playbackStats', JSON.stringify(_stats)); }, 30000);
-  function showPlaybackStats() {
-    const h = Math.floor(_stats.totalTimeMs / 3600000);
-    const m = Math.floor((_stats.totalTimeMs % 3600000) / 60000);
-    const msg = `Sessions: ${_stats.launches} | Tracks played: ${_stats.tracksPlayed} | Total play time: ${h}h ${m}m`;
-    announce(msg);
-    showOSD(msg);
-  }
-  // Track plays
-  const _origPlayPlaylistItem = playPlaylistItem;
-  playPlaylistItem = function(idx) { _stats.tracksPlayed++; _origPlayPlaylistItem(idx); };
-
-  /* ------------------------------------------------- CLEAR PLAYLIST TOOL -- */
-  function clearPlaylist() {
-    if (!playlist.length) { announce('Playlist already empty'); return; }
-    if (confirm('Clear entire playlist?')) {
-      playlist.length = 0;
-      currentPlaylistIndex = -1;
-      renderPlaylist();
-      announce('Playlist cleared');
-    }
-  }
-  const clearBtn = ce('button', { class: 'action-btn-small', text: 'Clear All', 'aria-label': 'Clear entire playlist', style: 'margin-left:4px;font-size:0.7rem;', onclick: clearPlaylist });
-  const ph = document.querySelector('#playlist-sidebar .header-btns');
-  if (ph) ph.appendChild(clearBtn);
-
-  /* ------------------------------------------------- KEYBOARD SHORTCUT CHEAT SHEET (compact) -- */
-  let _cheatVisible = false;
-  const cheatOverlay = ce('div', { id: 'cheat-overlay', style: 'display:none;position:fixed;bottom:70px;right:20px;z-index:9998;background:rgba(0,0,0,0.92);border:1px solid #444;border-radius:8px;padding:12px 16px;max-width:380px;max-height:60vh;overflow-y:auto;color:#ccc;font-size:0.75rem;line-height:1.6;' });
-  cheatOverlay.innerHTML = `<h3 style="margin:0 0 8px;color:var(--focus-color);font-size:0.9rem;">Keyboard Shortcuts</h3>
-    <table style="width:100%;border-collapse:collapse;"><tr><th style="text-align:left;padding:1px 8px;border-bottom:1px solid #333;">Key</th><th style="text-align:left;padding:1px 8px;border-bottom:1px solid #333;">Action</th></tr>
-    ${SHORTCUTS.map(([key, action]) => `<tr><td style="padding:1px 8px;font-family:monospace;color:var(--focus-color);">${key}</td><td style="padding:1px 8px;">${action}</td></tr>`).join('')}
-    </table>`;
-  const appContainer = document.getElementById('app-container');
-  if (appContainer) appContainer.appendChild(cheatOverlay);
-  COMMANDS.push({ name: 'Toggle Shortcut Cheatsheet', run: () => { _cheatVisible = !_cheatVisible; cheatOverlay.style.display = _cheatVisible ? 'block' : 'none'; announce(`Shortcut cheatsheet ${_cheatVisible ? 'shown' : 'hidden'}`); } });
 
   /* ==================================================================
      FEATURE PACK 6: Aspect Ratio, Balance, Wheel Volume, Sub Offset,
@@ -2714,98 +1931,9 @@ artist: 'Accessible Media Player',
      Snapshot Gallery, Audio-Only Mode, Save/Load Playlist, Theater
      ================================================================== */
 
-  /* ------------------------------------------------- VIDEO ASPECT RATIO -- */
-  const aspectWrap = ce('div', { style: 'display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;' });
-  const aspectModes = [
-    { label: 'Fit', val: 'contain' },
-    { label: 'Fill', val: 'fill' },
-    { label: 'Cover', val: 'cover' },
-    { label: '16:9', val: 'none', css: '16 / 9' },
-    { label: '4:3', val: 'none', css: '4 / 3' },
-    { label: '1:1', val: 'none', css: '1 / 1' },
-  ];
-  let _aspectMode = 'contain';
-  function applyAspect(mode) {
-    _aspectMode = mode;
-    if (mode === 'contain' || mode === 'fill' || mode === 'cover') {
-      mediaPlayer.style.objectFit = mode;
-      mediaPlayer.style.aspectRatio = '';
-    } else {
-      mediaPlayer.style.objectFit = 'fill';
-      mediaPlayer.style.aspectRatio = mode;
-    }
-    announce(`Aspect: ${mode}`);
-  }
-  aspectModes.forEach(m => {
-    const btn = ce('button', { class: 'action-btn-small', text: m.label, 'aria-label': `Aspect ratio ${m.label}`, style: 'font-size:0.7rem;padding:2px 6px;', onclick: () => applyAspect(m.css || m.val) });
-    aspectWrap.appendChild(btn);
-  });
-  const vidFilterParent = document.querySelector('#video-controls') || document.querySelector('#more-options-sidebar');
-  if (vidFilterParent) {
-    const sec = ce('div', { style: 'margin:8px 0;' }, [
-      ce('div', { style: 'font-size:0.85rem;color:#ccc;margin-bottom:4px;', text: 'Aspect Ratio:' }),
-      aspectWrap
-    ]);
-    vidFilterParent.appendChild(sec);
-  }
-
-  /* ------------------------------------------------- AUDIO BALANCE -- */
-  const balanceSlider = ce('input', { type: 'range', id: 'balance-slider', min: '-1', max: '1', step: '0.05', value: '0', 'aria-label': 'Audio balance', style: 'width:100%;' });
-  const balanceVal = ce('span', { style: 'font-size:0.8rem;color:#aaa;min-width:50px;text-align:center;', text: 'Center' });
-  const balanceWrap = ce('div', { style: 'display:flex;flex-direction:column;gap:4px;margin-top:8px;' }, [
-    ce('div', { style: 'display:flex;justify-content:space-between;align-items:center;' }, [
-      ce('span', { style: 'font-size:0.85rem;color:#ccc;', text: 'Balance:' }),
-      balanceVal
-    ]),
-    ce('div', { style: 'display:flex;gap:4px;align-items:center;' }, [
-      ce('span', { style: 'font-size:0.7rem;color:#888;', text: 'L' }),
-      balanceSlider,
-      ce('span', { style: 'font-size:0.7rem;color:#888;', text: 'R' })
-    ]),
-    ce('button', { class: 'action-btn-small', text: 'Reset', 'aria-label': 'Reset balance to center', style: 'align-self:center;font-size:0.7rem;', onclick: () => { balanceSlider.value = '0'; balanceSlider.dispatchEvent(new Event('input')); announce('Balance reset to center'); } })
-  ]);
-  balanceSlider.addEventListener('input', () => {
-    const val = parseFloat(balanceSlider.value);
-    if (pannerNode) pannerNode.pan.value = val;
-    const text = val === 0 ? 'Center' : (val < 0 ? `Left ${Math.round(-val*100)}%` : `Right ${Math.round(val*100)}%`);
-    balanceVal.textContent = text;
-  });
-  const audioSettingsEl2 = document.getElementById('audio-settings');
-  if (audioSettingsEl2) audioSettingsEl2.appendChild(balanceWrap);
-
-  /* ------------------------------------------------- MOUSE WHEEL VOLUME (Ctrl+Scroll) -- */
-  videoWrapper.addEventListener('wheel', (e) => {
-    if (!e.ctrlKey) return;
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -5 : 5;
-    const vol = Math.max(0, Math.min(100, (parseFloat(volumeSlider.value) || 50) + delta));
-    volumeSlider.value = vol;
-    volumeSlider.dispatchEvent(new Event('input'));
-    showOSD(`Volume ${Math.round(vol)}%`);
-  }, { passive: false });
-
-  /* ------------------------------------------------- SUBTITLE TIMING OFFSET -- */
-  let _subOffset = 0;
-  const subOffsetDisplay = ce('span', { style: 'font-size:0.8rem;color:#aaa;min-width:60px;text-align:center;', text: '0.0s' });
-  const subOffsetWrap = ce('div', { style: 'display:flex;gap:4px;align-items:center;margin-top:6px;' }, [
-    ce('span', { style: 'font-size:0.85rem;color:#ccc;', text: 'Sub Offset:' }),
-    ce('button', { class: 'action-btn-small', text: '-0.5s', 'aria-label': 'Subtitles earlier by 0.5 seconds', style: 'font-size:0.7rem;padding:2px 6px;', onclick: () => { _subOffset -= 0.5; updateSubOffset(); } }),
-    ce('button', { class: 'action-btn-small', text: '-0.1s', 'aria-label': 'Subtitles earlier by 0.1 seconds', style: 'font-size:0.7rem;padding:2px 6px;', onclick: () => { _subOffset -= 0.1; updateSubOffset(); } }),
-    subOffsetDisplay,
-    ce('button', { class: 'action-btn-small', text: '+0.1s', 'aria-label': 'Subtitles later by 0.1 seconds', style: 'font-size:0.7rem;padding:2px 6px;', onclick: () => { _subOffset += 0.1; updateSubOffset(); } }),
-    ce('button', { class: 'action-btn-small', text: '+0.5s', 'aria-label': 'Subtitles later by 0.5 seconds', style: 'font-size:0.7rem;padding:2px 6px;', onclick: () => { _subOffset += 0.5; updateSubOffset(); } }),
-    ce('button', { class: 'action-btn-small', text: 'Reset', 'aria-label': 'Reset subtitle offset', style: 'font-size:0.7rem;padding:2px 6px;', onclick: () => { _subOffset = 0; updateSubOffset(); announce('Subtitle offset reset'); } })
-  ]);
-  function updateSubOffset() {
-    subOffsetDisplay.textContent = `${_subOffset >= 0 ? '+' : ''}${_subOffset.toFixed(1)}s`;
-    showOSD(`Sub offset ${_subOffset >= 0 ? '+' : ''}${_subOffset.toFixed(1)}s`);
-  }
-  const subsSection = document.querySelector('#more-options-sidebar .subtitle-controls') || loadSubsBtn?.parentElement;
-  if (subsSection) subsSection.appendChild(subOffsetWrap);
-
   /* ------------------------------------------------- STARTUP VOLUME -- */
-  const startupVolSlider = ce('input', { type: 'range', id: 'startup-vol', min: '0', max: '100', value: String(loadState('startupVolume', 50)), 'aria-label': 'Startup volume', style: 'width:100%;' });
-  const startupVolVal = ce('span', { style: 'font-size:0.8rem;color:#aaa;', text: `${loadState('startupVolume', 50)}%` });
+  const startupVolSlider = ce('input', { type: 'range', id: 'startup-vol', min: '0', max: '100', value: String(loadState('startupVolume', 100)), 'aria-label': 'Startup volume', style: 'width:100%;' });
+  const startupVolVal = ce('span', { style: 'font-size:0.8rem;color:#aaa;', text: `${loadState('startupVolume', 100)}%` });
   const startupVolWrap = ce('div', { style: 'display:flex;flex-direction:column;gap:4px;margin-top:8px;padding:8px;background:#252525;border-radius:6px;border:1px solid #333;' }, [
     ce('div', { style: 'display:flex;justify-content:space-between;align-items:center;' }, [
       ce('span', { style: 'font-size:0.85rem;color:#ccc;', text: 'Startup Volume:' }),
@@ -2821,20 +1949,26 @@ artist: 'Accessible Media Player',
     volumeSlider.value = v;
     volumeSlider.dispatchEvent(new Event('input'));
   });
+  startupVolWrap.appendChild(ce('button', { class: 'action-btn-small', text: 'Start at Last Used Volume', onclick: () => {
+    localStorage.removeItem('startupVolume');
+    startupVolVal.textContent = 'Last used';
+    announce('Will start at the last used volume');
+  } }));
+  if (loadState('startupVolume', null) === null) startupVolVal.textContent = 'Last used';
   if (genSettings2) genSettings2.appendChild(startupVolWrap);
   // Apply saved startup volume on boot
   (function applyStartupVol() {
+    // A fixed startup volume wins; otherwise carry on at the last volume used
     const sv = loadState('startupVolume', null);
-    if (sv !== null && sv >= 0 && sv <= 100) {
-      volumeSlider.value = sv;
-      mediaPlayer.volume = sv / 100;
-      announce(`Startup volume ${sv}%`);
-    }
+    const last = loadState('lastVolume', null);
+    if (sv !== null && sv >= 0 && sv <= 100) mediaPlayer.volume = sv / 100;
+    else if (typeof last === 'number' && last >= 0 && last <= 1) mediaPlayer.volume = last;
+    updateVolumeUI();
   })();
 
   /* ------------------------------------------------- AUTOPLAY TOGGLE -- */
   const autoplayWrap = ce('label', { style: 'display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#ccc;margin-top:8px;padding:8px;background:#252525;border-radius:6px;border:1px solid #333;' }, [
-    ce('input', { type: 'checkbox', id: 'autoplay-toggle', checked: loadState('autoplay', true) ? 'checked' : undefined }),
+    ce('input', { type: 'checkbox', id: 'autoplay-on-load-toggle', checked: loadState('autoplay', true) ? 'checked' : undefined }),
     ce('span', { text: 'Auto-play on file load' })
   ]);
   if (genSettings2) genSettings2.appendChild(autoplayWrap);
@@ -2843,35 +1977,9 @@ artist: 'Accessible Media Player',
     announce(e.target.checked ? 'Auto-play enabled' : 'Auto-play disabled');
   });
 
-  /* ------------------------------------------------- RECURSIVE FOLDER IMPORT -- */
-  const importFolderBtn = ce('button', { class: 'action-btn-small', text: 'Import Folder Tree', 'aria-label': 'Import all media from folder and subfolders', style: 'margin-left:4px;font-size:0.7rem;', onclick: async () => {
-    const files = await ipcRenderer.invoke('open-directory-dialog');
-    if (Array.isArray(files) && files.length) {
-      let count = 0;
-      // Flatten: files already come recursively from main process
-      files.forEach(f => { addToPlaylist(f); count++; });
-      if (currentPlaylistIndex === -1) playPlaylistItem(playlist.length - count);
-      renderPlaylist();
-      announce(`Added ${count} files from folder tree`);
-    }
-  } });
-  const ph2 = document.querySelector('#playlist-sidebar .header-btns');
-  if (ph2) ph2.appendChild(importFolderBtn);
-
-  /* ------------------------------------------------- RECENT FILES MANAGER -- */
-  const clearRecentBtn = ce('button', { class: 'action-btn-small', text: 'Clear Recent', 'aria-label': 'Clear recent files history', style: 'font-size:0.7rem;margin-left:4px;', onclick: () => {
-    saveState('history', []);
-    if (typeof renderHistory === 'function') renderHistory();
-    announce('Recent history cleared');
-  } });
-  if (ph2) ph2.appendChild(clearRecentBtn);
-
   /* ------------------------------------------------- BOOKMARK SEARCH -- */
   const bmSearch = ce('input', { type: 'text', id: 'bm-search', placeholder: 'Filter bookmarks…', 'aria-label': 'Filter bookmarks', style: 'width:100%;padding:6px;margin:4px 0;background:#222;color:#fff;border:1px solid #333;border-radius:4px;box-sizing:border-box;font-size:0.8rem;' });
-  const bmHeader = document.querySelector('#bookmarks-sidebar .bookmark-header') || document.querySelector('#bookmarks-sidebar h3');
-  if (bmHeader && bmHeader.parentElement) {
-    bmHeader.parentElement.insertBefore(bmSearch, bmHeader.nextSibling);
-  }
+  sidebarAddBookmarkBtn.parentElement.insertBefore(bmSearch, sidebarAddBookmarkBtn.nextSibling);
   bmSearch.addEventListener('input', () => {
     const term = bmSearch.value.toLowerCase().trim();
     document.querySelectorAll('#bookmarks-sidebar .bookmark-item').forEach(el => {
@@ -2889,68 +1997,7 @@ artist: 'Accessible Media Player',
     });
   };
 
-  /* ------------------------------------------------- SNAPSHOT GALLERY -- */
-  let _snapshots = [];
-  try {
-    const legacy = localStorage.getItem('goonSnapshots');
-    if (legacy) {
-      _snapshots = JSON.parse(legacy);
-      localStorage.setItem('accessibleSnapshots', legacy);
-      localStorage.removeItem('goonSnapshots');
-    } else {
-      const s = localStorage.getItem('accessibleSnapshots');
-      if (s) _snapshots = JSON.parse(s);
-    }
-  } catch(e) {}
-  function addSnapshot(dataUrl) {
-    _snapshots.push({ dataUrl, time: Date.now(), label: getFileName(playlist[currentPlaylistIndex]) || 'Unknown' });
-    if (_snapshots.length > 50) _snapshots.shift();
-    localStorage.setItem('accessibleSnapshots', JSON.stringify(_snapshots));
-  }
-  // Patch the existing screenshot to also save to gallery
-  if (typeof screenshotWithTimestamp === 'function') {
-    const _origSS = screenshotWithTimestamp;
-    screenshotWithTimestamp = function() {
-      _origSS();
-      // Capture to gallery
-      const c = document.createElement('canvas');
-      c.width = mediaPlayer.videoWidth || 640;
-      c.height = mediaPlayer.videoHeight || 480;
-      c.getContext('2d').drawImage(mediaPlayer, 0, 0);
-      addSnapshot(c.toDataURL('image/jpeg', 0.7));
-    };
-  }
-  const galleryModal = ce('div', { id: 'snapshot-gallery', class: 'modal', 'aria-hidden': 'true', style: 'display:none;z-index:9999;' });
-  const galleryContent = ce('div', { class: 'modal-content', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Snapshot Gallery', style: 'min-width:600px;max-width:900px;padding:16px;max-height:80vh;display:flex;flex-direction:column;' }, [
-    ce('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;' }, [
-      ce('h2', { style: 'margin:0;font-size:1.1rem;', text: 'Snapshot Gallery' }),
-      ce('button', { class: 'icon-btn', 'aria-label': 'Close gallery', html: '<svg viewBox="0 0 24 24" style="width:20px;height:20px;"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>', onclick: closeGallery })
-    ]),
-    ce('div', { id: 'snapshot-grid', style: 'flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;padding:8px;' })
-  ]);
-  galleryModal.appendChild(galleryContent);
-  document.getElementById('app-container').appendChild(galleryModal);
-  function openGallery() { window._lastModalPrevFocus = document.activeElement; renderGallery(); galleryModal.style.display = 'flex'; galleryModal.setAttribute('aria-hidden', 'false'); galleryModal.querySelector('.icon-btn').focus(); }
-  function closeGallery() { galleryModal.style.display = 'none'; galleryModal.setAttribute('aria-hidden', 'true'); if (window._lastModalPrevFocus) { window._lastModalPrevFocus.focus(); window._lastModalPrevFocus = null; } }
-  function renderGallery() {
-    const grid = document.getElementById('snapshot-grid');
-    if (!grid) return;
-    grid.innerHTML = '';
-    if (!_snapshots.length) { grid.innerHTML = '<p style="color:#888;grid-column:1/-1;text-align:center;">No snapshots yet. Take a screenshot to save one here.</p>'; return; }
-    _snapshots.slice().reverse().forEach((s, i) => {
-      const div = ce('div', { style: 'position:relative;border-radius:6px;overflow:hidden;border:1px solid #333;' }, [
-        ce('img', { src: s.dataUrl, alt: s.label, style: 'width:100%;display:block;' }),
-        ce('div', { style: 'position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.7);padding:4px 8px;font-size:0.65rem;color:#ccc;', text: s.label }),
-        ce('button', { class: 'icon-btn', 'aria-label': 'Delete snapshot', style: 'position:absolute;top:2px;right:2px;background:rgba(0,0,0,0.6);border-radius:50%;padding:2px;font-size:0.6rem;', text: '✕', onclick: () => { _snapshots.splice(_snapshots.length - 1 - i, 1); localStorage.setItem('accessibleSnapshots', JSON.stringify(_snapshots)); renderGallery(); announce('Snapshot deleted'); } })
-      ]);
-      grid.appendChild(div);
-    });
-  }
-  enableModalA11y(galleryModal, galleryModal.querySelector('.icon-btn'), closeGallery);
-  COMMANDS.push({ name: 'Open Snapshot Gallery', run: openGallery });
-
   /* ------------------------------------------------- AUDIO-ONLY MODE -- */
-  let _audioOnly = loadState('audioOnly', false);
   const audioOnlyBtn = ce('button', { class: 'action-btn-small', 'aria-label': 'Toggle audio-only mode', 'aria-pressed': String(_audioOnly), text: _audioOnly ? 'Audio Only: On' : 'Audio Only: Off', style: _audioOnly ? 'color:var(--focus-color);' : '', onclick: () => {
     _audioOnly = !_audioOnly;
     audioOnlyBtn.textContent = _audioOnly ? 'Audio Only: On' : 'Audio Only: Off';
@@ -2960,130 +2007,426 @@ artist: 'Accessible Media Player',
     applyAudioOnly();
     announce(`Audio-only mode ${_audioOnly ? 'on' : 'off'}`);
   } });
-  function applyAudioOnly() {
-    if (_audioOnly || !mediaPlayer.videoWidth) {
-      mediaPlayer.style.display = 'none';
-      audioVisualizer.style.display = 'block';
-      audioVisualizer.style.width = '100%';
-      audioVisualizer.style.height = '100%';
-    } else {
-      mediaPlayer.style.display = '';
-      audioVisualizer.style.display = mediaPlayer.videoWidth ? 'none' : 'block';
-    }
-  }
   mediaPlayer.addEventListener('loadedmetadata', applyAudioOnly);
-  const togglePanel = document.querySelector('#more-options-sidebar .toggle-panel') || document.querySelector('#more-options-sidebar div:first-child');
-  if (togglePanel) togglePanel.parentElement.insertBefore(audioOnlyBtn, togglePanel.nextSibling);
 
-  /* ------------------------------------------------- SAVE/LOAD PLAYLIST JSON -- */
-  function savePlaylistJSON() {
-    if (!playlist.length) { announce('Playlist empty'); return; }
-    const data = JSON.stringify({ files: playlist, index: currentPlaylistIndex, version: 2 }, null, 2);
-    const blob = new Blob([data], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `accessible_playlist.json`; a.click();
-    URL.revokeObjectURL(url);
-    announce('Playlist saved as JSON');
-  }
-  function loadPlaylistJSON() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        try {
-          const data = JSON.parse(ev.target.result);
-          if (Array.isArray(data.files)) {
-            // Replace current playlist
-            playlist.length = 0;
-            data.files.forEach(f => addToPlaylist(f));
-            currentPlaylistIndex = Math.min(data.index || 0, playlist.length - 1);
-            renderPlaylist();
-            announce(`Loaded playlist with ${playlist.length} tracks`);
-          }
-        } catch(err) { announce('Failed to load playlist'); }
-      };
-      reader.readAsText(file);
-    };
-    input.click();
-  }
-  const plActionsWrap = ce('div', { style: 'display:flex;gap:4px;padding:4px 15px;' }, [
-    ce('button', { class: 'action-btn-small', text: 'Save JSON', 'aria-label': 'Save playlist as JSON', style: 'font-size:0.7rem;flex:1;', onclick: savePlaylistJSON }),
-    ce('button', { class: 'action-btn-small', text: 'Load JSON', 'aria-label': 'Load playlist from JSON file', style: 'font-size:0.7rem;flex:1;', onclick: loadPlaylistJSON })
-  ]);
-  const plItems = document.getElementById('playlist-items');
-  if (plItems && plItems.parentElement) plItems.parentElement.insertBefore(plActionsWrap, plItems);
-
-  /* ------------------------------------------------- THEATER MODE -- */
-  let _theaterMode = false;
-  const theaterBtn = ce('button', { class: 'action-btn-small', 'aria-label': 'Toggle theater mode', 'aria-pressed': 'false', text: 'Theater', style: 'margin-left:4px;', onclick: () => {
-    _theaterMode = !_theaterMode;
-    theaterBtn.setAttribute('aria-pressed', String(_theaterMode));
-    theaterBtn.style.color = _theaterMode ? 'var(--focus-color)' : '';
-    document.body.classList.toggle('theater-mode', _theaterMode);
-    announce(`Theater mode ${_theaterMode ? 'on' : 'off'}`);
-  } });
-  // Add theater-mode CSS
-  const theaterStyle = document.createElement('style');
-  theaterStyle.textContent = `
-    body.theater-mode { background:#000 !important; }
-    body.theater-mode #video-wrapper { box-shadow:none !important; border-radius:0 !important; }
-    body.theater-mode #playlist-sidebar,
-    body.theater-mode #bookmarks-sidebar,
-    body.theater-mode #more-options-sidebar,
-    body.theater-mode #top-bar,
-    body.theater-mode #controls-overlay { opacity:0; pointer-events:none; }
-    body.theater-mode #video-wrapper { flex:1 1 100%; }
-  `;
-  document.head.appendChild(theaterStyle);
-  const theaterBtnParent = document.querySelector('#controls-overlay .right-controls') || document.querySelector('#controls-overlay');
-  if (theaterBtnParent) theaterBtnParent.appendChild(theaterBtn);
 
   /* ------------------------------------------------- DRAG URL TO PLAY -- */
   document.addEventListener('drop', (e) => {
     const url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
-    if (url && (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('m3u8://') || url.startsWith('rtmp://'))) {
+    if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
       e.preventDefault();
-      addToPlaylist(url);
-      currentPlaylistIndex = playlist.length - 1;
-      loadMedia(url);
-      renderPlaylist();
-      announce('Playing dropped URL');
+      playPath(url.trim());
+      hideHome();
     }
   });
-
-  /* ------------------------------------------------- VIDEO INFO OVERLAY ON HOVER -- */
-  const vidInfoEl = ce('div', { id: 'vid-info', 'aria-hidden': 'true', style: 'display:none;position:absolute;top:8px;left:8px;background:rgba(0,0,0,0.75);color:#fff;padding:6px 10px;border-radius:4px;font-size:0.75rem;pointer-events:none;z-index:10;' });
-  videoWrapper.appendChild(vidInfoEl);
-  videoWrapper.addEventListener('mouseenter', () => {
-    if (!mediaPlayer.src) return;
-    const fn = getFileName(playlist[currentPlaylistIndex]) || 'Unknown';
-    const res = mediaPlayer.videoWidth ? `${mediaPlayer.videoWidth}x${mediaPlayer.videoHeight}` : 'Audio';
-    const dur = mediaPlayer.duration ? formatTime(mediaPlayer.duration) : 'Live';
-    vidInfoEl.textContent = `${fn} | ${res} | ${dur} | ${Math.round(mediaPlayer.playbackRate * 100)}% speed`;
-    vidInfoEl.style.display = 'block';
-  });
-  videoWrapper.addEventListener('mouseleave', () => { vidInfoEl.style.display = 'none'; });
 
   /* ------------------------------------------------- QUICK COMMANDS -- */
   COMMANDS.push(
     { name: 'Toggle Audio-Only Mode', run: () => audioOnlyBtn.click() },
-    { name: 'Toggle Theater Mode', run: () => theaterBtn.click() },
-    { name: 'Open Snapshot Gallery', run: openGallery },
-    { name: 'Reset Subtitle Offset', run: () => { _subOffset = 0; updateSubOffset(); announce('Subtitle offset reset'); } },
-    { name: 'Save Playlist JSON', run: savePlaylistJSON },
-    { name: 'Load Playlist JSON', run: loadPlaylistJSON },
-    { name: 'Aspect Ratio Contain', run: () => applyAspect('contain') },
-    { name: 'Aspect Ratio Fill', run: () => applyAspect('fill') },
-    { name: 'Aspect Ratio 16:9', run: () => applyAspect('16 / 9') },
-    { name: 'Aspect Ratio 4:3', run: () => applyAspect('4 / 3') },
-    { name: 'Reset Balance', run: () => { balanceSlider.value = '0'; balanceSlider.dispatchEvent(new Event('input')); announce('Balance reset'); } },
-    { name: 'Clear Recent History', run: () => { saveState('history', []); if (typeof renderHistory === 'function') renderHistory(); announce('Recent history cleared'); } },
+    { name: 'Reset Subtitle Delay', run: () => subDelayReset.click() },
+    { name: 'Reset Balance', run: () => { panSlider.value = '0'; panSlider.dispatchEvent(new Event('input')); announce('Balance reset'); } },
+
   );
 
+  /* ------------------------------------------------- SURROUND & 8D AUDIO -- */
+  const SOUND_MODES = [
+    { id: 'off', label: 'Off' },
+    { id: 'surround', label: 'Virtual Surround' },
+    { id: '8d', label: '8D (sound circles your head)' },
+    { id: 'wide', label: 'Wide Stereo' },
+    { id: 'hall', label: 'Concert Hall' },
+    { id: 'crossfeed', label: 'Headphone Comfort' }
+  ];
+  const soundSelect = ce('select', { id: 'surround-mode', 'aria-label': 'Sound mode', style: 'background:#333;color:#fff;border:1px solid #444;padding:5px;border-radius:4px;font-size:0.85rem;' },
+    SOUND_MODES.map(m => ce('option', { value: m.id, text: m.label })));
+  const soundAmount = ce('input', { type: 'range', id: 'surround-amount', min: '0', max: '100', value: '50', 'aria-label': 'Effect strength', 'aria-valuetext': '50 percent', style: 'flex:1;' });
+  const soundSpeed = ce('input', { type: 'range', id: 'surround-speed', min: '3', max: '60', value: '15', 'aria-label': '8D rotation speed', style: 'flex:1;' });
+  const soundSpeedRow = ce('div', { style: 'display:none;gap:8px;align-items:center;' }, [ce('span', { style: 'font-size:0.85rem;color:#ccc;', text: 'Rotation speed:' }), soundSpeed]);
+  moScroll.appendChild(ce('div', { style: 'background:#252525;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:8px;border:1px solid #333;' }, [
+    ce('h3', { style: 'margin:0;font-size:1rem;color:var(--focus-color);', text: 'Surround & 8D Sound' }),
+    ce('p', { style: 'margin:0;font-size:0.8rem;color:#bbb;', text: 'Best on headphones. Press Ctrl+D to switch modes.' }),
+    soundSelect,
+    ce('div', { style: 'display:flex;gap:8px;align-items:center;' }, [ce('span', { style: 'font-size:0.85rem;color:#ccc;', text: 'Strength:' }), soundAmount]),
+    soundSpeedRow
+  ]));
+
+  let effectNodes = [], effectOscillators = [], effectSpeedParams = [];
+  function buildAudioEffect() {
+    effectOscillators.forEach(o => { try { o.stop(); } catch (e) {} });
+    effectNodes.forEach(n => { try { n.disconnect(); } catch (e) {} });
+    effectNodes = []; effectOscillators = []; effectSpeedParams = [];
+    effectInput.disconnect();
+
+    const ctx = audioCtx, amount = parseFloat(soundAmount.value) / 100;
+    const keep = (n) => { effectNodes.push(n); return n; };
+    const gain = (v) => { const g = keep(ctx.createGain()); g.gain.value = v; return g; };
+    const output = gain(1);
+    output.connect(effectOutput);
+    const impulse = (seconds, decay) => {
+      const length = Math.floor(ctx.sampleRate * seconds), buffer = ctx.createBuffer(2, length, ctx.sampleRate);
+      for (let ch = 0; ch < 2; ch++) {
+        const data = buffer.getChannelData(ch);
+        for (let i = 0; i < length; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+      }
+      return buffer;
+    };
+    const reverb = (seconds, decay, wet) => {
+      const c = keep(ctx.createConvolver()); c.buffer = impulse(seconds, decay);
+      const level = gain(wet); c.connect(level); level.connect(output);
+      return c;
+    };
+    const hrtf = (x, z) => { // a point in space around the listener, at unit distance so level stays even
+      const p = keep(ctx.createPanner());
+      p.panningModel = 'HRTF'; p.distanceModel = 'inverse'; p.refDistance = 1; p.rolloffFactor = 1;
+      p.positionX.value = x; p.positionY.value = 0; p.positionZ.value = z;
+      return p;
+    };
+    const speaker = (degrees) => hrtf(Math.sin(degrees * Math.PI / 180), -Math.cos(degrees * Math.PI / 180));
+    const split = () => { const s = keep(ctx.createChannelSplitter(2)); effectInput.connect(s); return s; };
+
+    switch (soundSelect.value) {
+      case 'surround': {
+        // Stereo fed to virtual front speakers, with a delayed, softened copy from behind
+        output.gain.value = 0.8;
+        const s = split();
+        const place = (channel, frontAngle, rearAngle) => {
+          const front = speaker(frontAngle); s.connect(front, channel); front.connect(output);
+          const delay = keep(ctx.createDelay(0.1)); delay.delayTime.value = 0.018;
+          const soften = keep(ctx.createBiquadFilter()); soften.type = 'lowpass'; soften.frequency.value = 6000;
+          const level = gain(0.25 + amount * 0.55);
+          const rear = speaker(rearAngle);
+          s.connect(delay, channel); delay.connect(soften); soften.connect(level); level.connect(rear); rear.connect(output);
+        };
+        place(0, -30, -110);
+        place(1, 30, 110);
+        effectInput.connect(reverb(0.5, 3, 0.1 + amount * 0.2));
+        break;
+      }
+      case '8d': {
+        // The whole mix travels in a circle: one oscillator drives left-right, a matching one front-back
+        output.gain.value = 0.9;
+        const orbit = hrtf(0, 0);
+        const rate = parseFloat(soundSpeed.value) / 100;
+        const cosine = ctx.createPeriodicWave(new Float32Array([0, 1]), new Float32Array([0, 0]), { disableNormalization: true });
+        const x = ctx.createOscillator(), z = ctx.createOscillator();
+        x.type = 'sine'; z.setPeriodicWave(cosine);
+        x.frequency.value = rate; z.frequency.value = rate;
+        const startAt = ctx.currentTime + 0.02;
+        x.connect(orbit.positionX); z.connect(orbit.positionZ);
+        x.start(startAt); z.start(startAt);
+        keep(x); keep(z);
+        effectOscillators = [x, z];
+        effectSpeedParams = [x.frequency, z.frequency];
+        effectInput.connect(orbit); orbit.connect(output);
+        orbit.connect(reverb(1.4, 2.5, 0.1 + amount * 0.3));
+        const dry = gain(0.2 * (1 - amount)); effectInput.connect(dry); dry.connect(output);
+        break;
+      }
+      case 'wide': {
+        // More of the difference between the channels spreads the image without moving the centre
+        const width = 1 + amount * 2, same = (1 + width) / 2, cross = (1 - width) / 2;
+        output.gain.value = 1 / same;
+        const s = split(), m = keep(ctx.createChannelMerger(2));
+        [[0, 0, same], [1, 1, same], [1, 0, cross], [0, 1, cross]].forEach(([from, to, level]) => { const g = gain(level); s.connect(g, from); g.connect(m, 0, to); });
+        m.connect(output);
+        break;
+      }
+      case 'hall': {
+        output.gain.value = 0.8;
+        const dry = gain(1); effectInput.connect(dry); dry.connect(output);
+        effectInput.connect(reverb(2.6, 3, 0.15 + amount * 0.5));
+        break;
+      }
+      case 'crossfeed': {
+        // Each ear hears a little of the other side, as with speakers, which eases long listening
+        output.gain.value = 0.8;
+        const s = split(), m = keep(ctx.createChannelMerger(2));
+        [[0, 0], [1, 1]].forEach(([from, to]) => { const g = gain(1); s.connect(g, from); g.connect(m, 0, to); });
+        [[0, 1], [1, 0]].forEach(([from, to]) => {
+          const d = keep(ctx.createDelay(0.01)); d.delayTime.value = 0.0003;
+          const f = keep(ctx.createBiquadFilter()); f.type = 'lowpass'; f.frequency.value = 700;
+          const g = gain(0.2 + amount * 0.4);
+          s.connect(d, from); d.connect(f); f.connect(g); g.connect(m, 0, to);
+        });
+        m.connect(output);
+        break;
+      }
+      default:
+        effectInput.connect(effectOutput);
+    }
+  }
+  function applySoundMode() {
+    initAudio();
+    if (effectInput) buildAudioEffect();
+    soundSpeedRow.style.display = soundSelect.value === '8d' ? 'flex' : 'none';
+    saveState('soundMode', soundSelect.value);
+  }
+  soundSelect.addEventListener('change', () => {
+    applySoundMode();
+    announce(`Sound mode: ${soundSelect.options[soundSelect.selectedIndex].text}`);
+    showOSD(soundSelect.options[soundSelect.selectedIndex].text);
+  });
+  let soundAmountTimer = null;
+  soundAmount.addEventListener('input', () => {
+    soundAmount.setAttribute('aria-valuetext', `${soundAmount.value} percent`);
+    clearTimeout(soundAmountTimer); // rebuilding reverb is too heavy to do on every slider tick
+    soundAmountTimer = setTimeout(() => { if (soundSelect.value !== 'off') applySoundMode(); }, 150);
+  });
+  soundSpeed.addEventListener('input', () => {
+    const rate = parseFloat(soundSpeed.value) / 100;
+    soundSpeed.setAttribute('aria-valuetext', `${Math.round(1 / rate)} seconds per circle`);
+    effectSpeedParams.forEach(p => { p.value = rate; });
+  });
+  function cycleAudioEffect() {
+    soundSelect.selectedIndex = (soundSelect.selectedIndex + 1) % soundSelect.options.length;
+    soundSelect.dispatchEvent(new Event('change'));
+  }
+  COMMANDS.push(...SOUND_MODES.map(m => ({ name: `Sound Mode: ${m.label}`, run: () => { soundSelect.value = m.id; soundSelect.dispatchEvent(new Event('change')); } })));
+  eqResetBtn.addEventListener('click', () => { if (soundSelect.value !== 'off') { soundSelect.value = 'off'; applySoundMode(); } });
+
+  /* ---- Keep keyboard users inside panels when they click on empty space ---- */
+  // Without a focusable target the focus falls to the page, where Escape and Tab stop working
+  document.querySelectorAll('[role="dialog"], #playlist-sidebar, #bookmarks-sidebar, #more-options-sidebar').forEach(el => {
+    el.setAttribute('tabindex', '-1');
+    el.style.outline = 'none';
+  });
+  document.addEventListener('mousedown', (e) => {
+    if (e.target.classList && e.target.classList.contains('modal')) {
+      e.preventDefault();
+      const dialog = e.target.querySelector('[role="dialog"]');
+      if (dialog) dialog.focus();
+    }
+  });
+  ipcRenderer.on('request-help', () => { if (!isModalOpen()) openHelp(); });
+  shuffleToggle.addEventListener('change', () => { shuffleHistory.length = 0; });
+
+  /* ------------------------------------------------- CHAPTERS -- */
+  let currentChapters = [];
+  const chapterSelect = ce('select', { id: 'chapter-select', 'aria-label': 'Chapter', style: 'background:#333;color:#fff;border:1px solid #444;padding:5px;border-radius:4px;font-size:0.85rem;' });
+  const chapterCard = ce('div', { style: 'display:none;background:#252525;padding:12px;border-radius:6px;flex-direction:column;gap:8px;border:1px solid #333;' }, [
+    ce('h3', { style: 'margin:0;font-size:1rem;color:var(--focus-color);', text: 'Chapters' }), chapterSelect
+  ]);
+  moScroll.appendChild(chapterCard);
+  function clearChapters() { currentChapters = []; chapterSelect.innerHTML = ''; chapterCard.style.display = 'none'; }
+  async function loadChapters(fp) {
+    if (isUrl(fp)) return;
+    const list = await ipcRenderer.invoke('read-chapters', fp).catch(() => []);
+    if (currentFilePath !== fp || !list.length) return;
+    currentChapters = list;
+    list.forEach((c, i) => chapterSelect.appendChild(ce('option', { value: i, text: `${c.title} (${formatTime(c.time)})` })));
+    chapterCard.style.display = 'flex';
+    announce(`${list.length} chapters available`);
+  }
+  function chapterIndexNow() {
+    let at = -1;
+    currentChapters.forEach((c, i) => { if (mediaPlayer.currentTime >= c.time - 0.5) at = i; });
+    return at;
+  }
+  function goToChapter(i) {
+    const chapter = currentChapters[i];
+    if (!chapter) return announce(currentChapters.length ? 'No more chapters' : 'This file has no chapters');
+    mediaPlayer.currentTime = chapter.time;
+    chapterSelect.value = i;
+    announce(`Chapter ${i + 1}: ${chapter.title}`);
+  }
+  chapterSelect.addEventListener('change', () => goToChapter(parseInt(chapterSelect.value, 10)));
+  mediaPlayer.addEventListener('timeupdate', () => {
+    const i = chapterIndexNow();
+    if (i >= 0 && document.activeElement !== chapterSelect) chapterSelect.value = i;
+  });
+
+  /* ------------------------------------------------- SOUND CUES -- */
+  const addA11yCheckbox = (parent, id, label, checked) => {
+    const row = ce('label', { class: 'toggle-label', style: 'display:flex;align-items:center;gap:10px;cursor:pointer;margin-top:15px;' }, [
+      ce('input', { type: 'checkbox', id, style: 'width:18px;height:18px;' }), ce('span', { text: label })
+    ]);
+    document.getElementById(parent).appendChild(row);
+    const box = row.querySelector('input');
+    box.checked = !!checked;
+    return box;
+  };
+  const cuesCb = addA11yCheckbox('access-settings', 'sound-cues-toggle', 'Play short sound cues (play, pause, end of queue, errors)', true);
+  // Frequency, start offset and length, in a separate context so effects never colour them
+  const CUES = {
+    play: [[520, 0, 0.07], [780, 0.07, 0.09]],
+    pause: [[620, 0, 0.07], [420, 0.07, 0.09]],
+    end: [[660, 0, 0.1], [520, 0.11, 0.1], [390, 0.22, 0.18]],
+    error: [[220, 0, 0.14], [180, 0.16, 0.2]],
+    bookmark: [[880, 0, 0.06], [1100, 0.07, 0.06]]
+  };
+  let cueContext = null;
+  window.ampCue = function (name) {
+    if (!cuesCb.checked || bootSilent) return;
+    cueContext = cueContext || new (window.AudioContext || window.webkitAudioContext)();
+    if (cueContext.state === 'suspended') cueContext.resume();
+    const start = cueContext.currentTime + 0.01;
+    CUES[name].forEach(([frequency, offset, length]) => {
+      const osc = cueContext.createOscillator(), level = cueContext.createGain();
+      osc.frequency.value = frequency;
+      level.gain.setValueAtTime(0.0001, start + offset);
+      level.gain.exponentialRampToValueAtTime(0.16, start + offset + 0.012);
+      level.gain.exponentialRampToValueAtTime(0.0001, start + offset + length);
+      osc.connect(level); level.connect(cueContext.destination);
+      osc.start(start + offset);
+      osc.stop(start + offset + length + 0.02);
+    });
+  };
+  mediaPlayer.addEventListener('play', () => window.ampCue('play'));
+  mediaPlayer.addEventListener('pause', () => { if (!mediaPlayer.ended && !mediaPlayer.seeking) window.ampCue('pause'); });
+  mediaPlayer.addEventListener('error', () => window.ampCue('error'));
+
+  /* ------------------------------------------------- SPEECH TOOLS -- */
+  const duckCb = addA11yCheckbox('access-settings', 'duck-toggle', 'Lower the media while the player announces something', false);
+  const speechCb = addA11yCheckbox('access-settings', 'speech-boost-toggle', 'Speech boost: make voices clearer', false);
+  let duckTimer = null;
+  // The player cannot see when a screen reader finishes talking, so this estimates it from the length
+  function duckForSpeech(text) {
+    if (!duckCb.checked || !duckNode || mediaPlayer.paused) return;
+    const g = duckNode.gain, now = audioCtx.currentTime;
+    g.cancelScheduledValues(now);
+    g.setTargetAtTime(0.3, now, 0.03);
+    clearTimeout(duckTimer);
+    duckTimer = setTimeout(() => {
+      g.cancelScheduledValues(audioCtx.currentTime);
+      g.setTargetAtTime(1, audioCtx.currentTime, 0.15);
+    }, Math.min(5000, 700 + text.length * 70));
+  }
+  const _announceBeforeDuck = announce;
+  announce = function (message, forceCritical) {
+    if (!bootSilent) duckForSpeech(message);
+    _announceBeforeDuck(message, forceCritical);
+  };
+  function applySpeechBoost() {
+    initAudio();
+    if (!speechHighpass) return;
+    const on = speechCb.checked;
+    speechHighpass.frequency.value = on ? 120 : 20;
+    speechPresence.gain.value = on ? 3 : 0;
+    speechClarity.gain.value = on ? 6 : 0;
+  }
+  speechCb.addEventListener('change', () => { applySpeechBoost(); announce(`Speech boost ${speechCb.checked ? 'on' : 'off'}`); });
+  function toggleSpeechBoost() { speechCb.checked = !speechCb.checked; speechCb.dispatchEvent(new Event('change')); }
+  COMMANDS.push({ name: 'Toggle Speech Boost', run: toggleSpeechBoost });
+
+  /* ------------------------------------------------- SKIP SILENCE -- */
+  const skipSilenceCb = addA11yCheckbox('general-settings', 'skip-silence-toggle', 'Skip silence (speeds through quiet gaps)', false);
+  const SILENCE_LEVEL = 0.004, SILENCE_WAIT_MS = 400, SILENCE_RATE = 4;
+  let quietMs = 0, rateBeforeSkip = 1, skipEndedAt = 0, lastSilenceCheck = performance.now();
+  function silenceSkipIsActive() { return skippingSilence || performance.now() - skipEndedAt < 300; }
+  function endSilenceSkip() {
+    if (!skippingSilence) return;
+    skippingSilence = false;
+    skipEndedAt = performance.now();
+    mediaPlayer.playbackRate = rateBeforeSkip;
+  }
+  setInterval(() => {
+    const nowMs = performance.now(), elapsed = Math.min(1000, nowMs - lastSilenceCheck);
+    lastSilenceCheck = nowMs;
+    if (!skipSilenceCb.checked || !silenceAnalyser || mediaPlayer.paused || !hasMedia()) { endSilenceSkip(); quietMs = 0; return; }
+    const samples = new Float32Array(silenceAnalyser.fftSize);
+    silenceAnalyser.getFloatTimeDomainData(samples);
+    const level = Math.sqrt(samples.reduce((sum, v) => sum + v * v, 0) / samples.length);
+    if (level >= SILENCE_LEVEL) { quietMs = 0; endSilenceSkip(); return; }
+    quietMs += elapsed;
+    if (!skippingSilence && quietMs >= SILENCE_WAIT_MS) {
+      rateBeforeSkip = mediaPlayer.playbackRate;
+      skippingSilence = true;
+      mediaPlayer.playbackRate = SILENCE_RATE;
+    }
+  }, 100);
+  skipSilenceCb.addEventListener('change', () => announce(`Skip silence ${skipSilenceCb.checked ? 'on' : 'off'}`));
+  COMMANDS.push({ name: 'Toggle Skip Silence', run: () => { skipSilenceCb.checked = !skipSilenceCb.checked; skipSilenceCb.dispatchEvent(new Event('change')); } });
+
+  /* ---- Updates ---- */
+  const updatesCb = addA11yCheckbox('general-settings', 'auto-update-toggle', 'Check for updates when the player starts', true);
+  COMMANDS.push({ name: 'Check for Updates', run: () => ipcRenderer.send('check-updates', true) });
+  setTimeout(() => { if (updatesCb.checked) ipcRenderer.send('check-updates', false); }, 20000);
+
+  /* ------------------------------------------------- READ SUBTITLES ALOUD -- */
+  // Sends each subtitle to the screen reader, for foreign-language and described content
+  const addCheckbox = (parent, id, label) => {
+    const row = ce('label', { class: 'toggle-label', style: 'display:flex;align-items:center;gap:10px;cursor:pointer;margin-top:15px;' }, [
+      ce('input', { type: 'checkbox', id, style: 'width:18px;height:18px;' }), ce('span', { text: label })
+    ]);
+    document.getElementById(parent).appendChild(row);
+    return row.querySelector('input');
+  };
+  const readSubsCb = addCheckbox('access-settings', 'read-subs-toggle', 'Read subtitles with my screen reader');
+  addCheckbox('general-settings', 'notify-toggle', 'Show a desktop notification when the track changes');
+  let spokenTrack = null;
+  function speakCues() {
+    if (!readSubsCb.checked || !this.activeCues || !this.activeCues.length) return;
+    const spoken = Array.from(this.activeCues).map(c => c.text.replace(/<[^>]+>/g, '')).join(' ');
+    duckForSpeech(spoken);
+    politeRegion.textContent = spoken;
+  }
+  document.addEventListener('subtitles-changed', () => {
+    const track = currentSubtitleTrack && currentSubtitleTrack.track;
+    if (!track || track === spokenTrack) return;
+    if (spokenTrack) spokenTrack.removeEventListener('cuechange', speakCues);
+    track.addEventListener('cuechange', speakCues);
+    spokenTrack = track;
+  });
+
+  /* ---- More Options in a sensible order, instead of the order features were added ---- */
+  const cardOrder = ['Quick Actions', 'Quick Toggles', 'Transcript', 'Lyrics', 'Subtitle Customization', 'Subtitle Sync', 'Audio Track', 'Equalizer', 'Chapters', 'Surround', 'Audio Normalizer', 'Crossfade', 'Smart Pause', 'Playback Speed', 'A-B Loop', 'Sleep Timer'];
+  const cardRank = (card) => {
+    const h = card.querySelector('h3');
+    const i = h ? cardOrder.findIndex(n => h.textContent.startsWith(n)) : -1;
+    return i === -1 ? cardOrder.length : i;
+  };
+  Array.from(moScroll.children).sort((a, b) => cardRank(a) - cardRank(b)).forEach(c => moScroll.appendChild(c));
+
+  /* ------------------------------------------------- REMEMBER SETTINGS -- */
+  // Accessibility preferences especially must survive a restart.
+  function persistControl(id, key, eventName) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const isCheck = el.type === 'checkbox';
+    const saved = loadState(key, null);
+    if (saved !== null && saved !== (isCheck ? el.checked : el.value)) {
+      if (isCheck) el.checked = saved; else el.value = saved;
+      el.dispatchEvent(new Event(eventName));
+    }
+    el.addEventListener(eventName, () => saveState(key, isCheck ? el.checked : el.value));
+  }
+  [
+    ['high-contrast-toggle', 'change'], ['large-text-toggle', 'change'], ['verbose-announce-toggle', 'change'],
+    ['autoplay-toggle', 'change'], ['shuffle-toggle', 'change'], ['read-subs-toggle', 'change'], ['notify-toggle', 'change'],
+    ['crossfade-toggle', 'change'], ['gapless-toggle', 'change'], ['smart-pause-toggle', 'change'], ['lyrics-toggle', 'change'],
+    ['sub-size-select', 'change'], ['sub-color-select', 'change'], ['sub-bg-select', 'change'], ['sub-font-select', 'change'],
+    ['boost-slider', 'input'], ['pan-slider', 'input'],
+    ['crossfade-duration', 'input'], ['surround-amount', 'input'], ['surround-speed', 'input'],
+    ['sound-cues-toggle', 'change'], ['duck-toggle', 'change'], ['speech-boost-toggle', 'change'], ['skip-silence-toggle', 'change'], ['auto-update-toggle', 'change']
+  ].forEach(([id, eventName]) => persistControl(id, 'setting:' + id, eventName));
+
+  const eqSliders = Array.from(document.querySelectorAll('.eq-slider'));
+  const savedBands = loadState('eqBands', null);
+  if (Array.isArray(savedBands)) eqSliders.forEach((s, i) => { if (typeof savedBands[i] === 'number') { s.value = savedBands[i]; s.dispatchEvent(new Event('input')); } });
+  eqSliders.forEach(s => s.addEventListener('input', () => saveState('eqBands', eqSliders.map(x => parseFloat(x.value)))));
+
+  const _origSetRepeat = setRepeatMode;
+  setRepeatMode = function (mode) { _origSetRepeat(mode); saveState('repeatMode', mode); };
+  const savedRepeat = loadState('repeatMode', 'off');
+  if (savedRepeat === 'one' || savedRepeat === 'all') setRepeatMode(savedRepeat);
+
+  const savedSound = loadState('soundMode', 'off');
+  if (savedSound !== 'off' && SOUND_MODES.some(m => m.id === savedSound)) { soundSelect.value = savedSound; applySoundMode(); }
+
+  const savedNorm = loadState('normPreset', 'off');
+  if (savedNorm !== 'off' && Array.from(normPresetSelect.options).some(o => o.value === savedNorm)) {
+    normPresetSelect.value = savedNorm;
+    normPresetSelect.dispatchEvent(new Event('change'));
+  }
+
+  // Quick Toggles reflect changes made elsewhere (keyboard, settings) when opened
+  const _origToggleMore = toggleMoreOptionsSidebar;
+  toggleMoreOptionsSidebar = function () {
+    _origToggleMore();
+    togglesPanel.querySelectorAll('button').forEach(b => { if (b._upd) b._upd(); });
+  };
+  moreOptionsToggleBtn.addEventListener('click', () => togglesPanel.querySelectorAll('button').forEach(b => { if (b._upd) b._upd(); }));
+
+  bootSilent = false;
   console.log('[features.js] loaded');
 })();

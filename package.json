@@ -1,6 +1,6 @@
 {
   "name": "accessible-media-player",
-  "version": "2.1.0",
+  "version": "2.4.0",
   "description": "Accessible Media Player - A fully featured, screen-reader friendly media player",
   "repository": {
     "type": "git",
@@ -16,11 +16,13 @@
     "appId": "com.accessible.mediaplayer",
     "productName": "Accessible Media Player",
     "win": {
-      "target": "nsis",
+      "target": ["nsis", "portable"],
       "signAndEditExecutable": false,
       "forceCodeSigning": false,
       "verifyUpdateCodeSignature": false
     },
+    "publish": [{ "provider": "github", "owner": "demon-of-fire", "repo": "accessible-media-player" }],
+    "portable": { "artifactName": "Accessible-Media-Player-Portable-${version}.${ext}" },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
@@ -30,7 +32,7 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Accessible Media Player",
-      "artifactName": "Accessible Media Player Setup.${ext}",
+      "artifactName": "Accessible-Media-Player-Setup-${version}.${ext}",
       "perMachine": true,
       "allowElevation": true,
       "deleteAppDataOnUninstall": false,
@@ -41,6 +43,7 @@
     "files": [
       "index.html",
       "main.js",
+      "preload.js",
       "renderer.js",
       "features.js",
       "style.css",
@@ -58,11 +61,13 @@
       { "ext": "flac", "name": "AccessibleMediaPlayer.FLAC", "description": "FLAC Audio", "mimeType": "audio/flac" },
       { "ext": "aac", "name": "AccessibleMediaPlayer.AAC", "description": "AAC Audio", "mimeType": "audio/aac" },
       { "ext": "m4a", "name": "AccessibleMediaPlayer.M4A", "description": "M4A Audio", "mimeType": "audio/mp4" },
-      { "ext": "wma", "name": "AccessibleMediaPlayer.WMA", "description": "WMA Audio", "mimeType": "audio/x-ms-wma" },
+
       { "ext": "m4v", "name": "AccessibleMediaPlayer.M4V", "description": "M4V Video", "mimeType": "video/x-m4v" },
       { "ext": "3gp", "name": "AccessibleMediaPlayer.3GP", "description": "3GP Video", "mimeType": "video/3gpp" },
       { "ext": "mov", "name": "AccessibleMediaPlayer.MOV", "description": "QuickTime Movie", "mimeType": "video/quicktime" },
-      { "ext": "wmv", "name": "AccessibleMediaPlayer.WMV", "description": "WMV Video", "mimeType": "video/x-ms-wmv" }
+      { "ext": "wma", "name": "AccessibleMediaPlayer.WMA", "description": "WMA Audio", "mimeType": "audio/x-ms-wma" },
+      { "ext": "wmv", "name": "AccessibleMediaPlayer.WMV", "description": "WMV Video", "mimeType": "video/x-ms-wmv" },
+      { "ext": "flv", "name": "AccessibleMediaPlayer.FLV", "description": "Flash Video", "mimeType": "video/x-flv" }
     ]
   },
   "keywords": [],

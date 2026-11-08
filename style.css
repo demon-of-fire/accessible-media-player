@@ -1,4 +1,4 @@
-                                                                                                                                                                                                                                                      :root {
+:root {
   --bg-color: #0f0f0f;
   --text-color: #f1f1f1;
   --accent-color: #ff0000;
@@ -201,10 +201,14 @@ button:hover {
   opacity: 0; pointer-events: none; transition: opacity 0.2s;
   z-index: 20;
 }
-.tooltip:hover::before { opacity: 1; }
+.tooltip:hover::before, .tooltip:focus-visible::before { opacity: 1; }
+#top-bar .tooltip::before { bottom: auto; top: 120%; }
+.top-bar-left .tooltip::before { left: 0; transform: none; }
+.top-bar-right .tooltip::before { left: auto; right: 0; transform: none; }
 
 /* Volume Group */
 .volume-group { display: flex; align-items: center; gap: 5px; }
+
 #volume-slider { width: 0; opacity: 0; transition: width 0.3s, opacity 0.3s; transform-origin: left; }
 .volume-group:hover #volume-slider, #volume-slider:focus { width: 80px; opacity: 1; }
 
@@ -234,45 +238,25 @@ input[type=range]:hover::-webkit-slider-thumb, input[type=range]:focus::-webkit-
 }
 .progress-marker {
   position: absolute;
-  top: 10px; /* aligns with progress track */
+  top: 50%; /* centred on the progress track */
   width: 5px;
   height: 6px;
   background-color: var(--focus-color);
   border-radius: 1px;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   z-index: 5;
   cursor: pointer;
   pointer-events: auto;
   transition: transform 0.15s ease, height 0.15s ease, background-color 0.15s ease;
 }
 .progress-marker:hover {
-  transform: translateX(-50%) scale(1.5);
+  transform: translate(-50%, -50%) scale(1.5);
   height: 10px;
   background-color: #ffffff;
   box-shadow: 0 0 5px var(--focus-color);
 }
 #progress-slider { width: 100%; position: relative; z-index: 4; }
 #time-display { font-size: 0.9rem; font-variant-numeric: tabular-nums; margin-left: 10px; text-shadow: 1px 1px 2px rgba(0,0,0,0.8); }
-
-/* Center Overlay Animation */
-#center-icon-overlay {
-  position: absolute; top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  background: rgba(0,0,0,0.5); border-radius: 50%;
-  width: 70px; height: 70px; display: flex;
-  justify-content: center; align-items: center;
-  pointer-events: none; opacity: 0; transition: opacity 0.3s, transform 0.3s;
-  z-index: 20;
-}
-#center-icon-overlay.animate {
-  opacity: 1; transform: translate(-50%, -50%) scale(1.5);
-  animation: fadeOut 0.5s forwards;
-}
-@keyframes fadeOut {
-  0% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.5); }
-}
-#center-icon-overlay svg { width: 40px; height: 40px; fill: white; }
 
 /* Settings Modal */
 .modal {
@@ -305,9 +289,11 @@ input[type=range]:hover::-webkit-slider-thumb, input[type=range]:focus::-webkit-
   display: flex; flex-direction: column; align-items: center; gap: 10px;
 }
 .eq-slider {
-  -webkit-appearance: slider-vertical;
+  writing-mode: vertical-lr; direction: rtl;
   height: 90px; width: 20px;
 }
+.eq-slider::-webkit-slider-runnable-track { width: 4px; height: auto; }
+.eq-slider::-webkit-slider-thumb { margin-top: 0; margin-left: -4px; transform: scale(1); }
 .eq-label { font-size: 0.7rem; color: #aaa; }
 .action-btn {
   background: #333; padding: 10px 15px; border-radius: 4px; font-weight: bold; border: 1px solid #444;
@@ -324,9 +310,8 @@ body.high-contrast {
 body.high-contrast .icon-btn { color: #ffffff; }
 body.high-contrast .icon-btn svg { fill: #ffffff; }
 body.high-contrast .tab-btn.active { color: #ffff00; border-left-color: #ffff00; }
-body.large-text {
-  font-size: 120%;
-}
+/* Nearly every size in the app is in rem, so the root is what has to grow */
+html:has(body.large-text) { font-size: 125%; }
 body.large-text button, body.large-text h2, body.large-text h3 {
   font-size: 1.1em;
 }
@@ -353,7 +338,7 @@ video::cue {
   display: flex; justify-content: space-between; align-items: center;
 }
 .playlist-header h2 { margin: 0; font-size: 1.2rem; }
-.header-btns { display: flex; gap: 5px; align-items: center; }
+.header-btns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; align-items: center; }
 .action-btn-small { background: #333; padding: 6px 12px; border-radius: 4px; font-size: 0.85rem; }
 .action-btn-small:hover { background: #444; }
 #playlist-items { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
@@ -471,15 +456,6 @@ select#sleep-timer-select:focus {
 }
 #osd.show { opacity: 1; }
 
-/* FPS overlay */
-#fps-overlay {
-  position: absolute; top: 10px; left: 10px;
-  background: rgba(0,0,0,0.6); color: #3ea6ff;
-  padding: 4px 8px; border-radius: 4px;
-  font-size: 0.8rem; font-variant-numeric: tabular-nums;
-  z-index: 60; display: none; pointer-events: none;
-}
-
 /* Seek preview tooltip */
 #seek-tip {
   position: fixed; transform: translateX(-50%);
@@ -524,7 +500,7 @@ select#sleep-timer-select:focus {
 .hm-tile-meta { overflow: hidden; }
 .hm-tile-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hm-tile-sub { font-size: 0.78rem; color: #888; }
-.hm-empty { color: #777; font-style: italic; }
+.hm-empty { color: #999; font-style: italic; grid-column: 1 / -1; }
 .hm-tips { color: #999; font-size: 0.88rem; line-height: 1.7; padding-left: 18px; }
 
 /* Command palette */
@@ -547,21 +523,11 @@ select#sleep-timer-select:focus {
 }
 
 /* Enhanced bookmarks */
-.bookmark-thumb { width: 100%; height: 80px; object-fit: cover; border-radius: 4px; background: #000; margin-bottom: 6px; }
-.bookmark-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--focus-color); font-size: 1.4rem; }
+
 .bookmark-note { width: 100%; background: #1a1a1a; color: #ddd; border: 1px solid #333; border-radius: 4px; padding: 6px; font-family: inherit; font-size: 0.82rem; resize: vertical; min-height: 38px; }
 
-/* Focus / reading mode */
-body.focus-mode #top-bar,
-body.focus-mode #controls-overlay,
-body.focus-mode #playlist-sidebar,
-body.focus-mode #bookmarks-sidebar,
-body.focus-mode #more-options-sidebar,
-body.focus-mode #home-screen { display: none !important; }
-body.focus-mode #video-wrapper { cursor: none; }
-
 /* Skip link (visible only on focus) */
-#skip-link:focus {
+.skip-link:focus {
   position: fixed; top: 8px; left: 8px; z-index: 500; width: auto; height: auto;
   clip: auto; margin: 0; padding: 8px 14px; background: var(--focus-color); color: #000;
   border-radius: 4px; font-weight: bold; text-decoration: none;
@@ -579,15 +545,8 @@ video::cue { font-family: var(--cue-font-family, sans-serif) !important; }
   #center-icon-overlay.animate { animation: none !important; opacity: 0 !important; }
 }
 
-/* Themes */
-[data-theme="light"] {
-  --bg-color: #ececec; --text-color: #111; --control-bg: rgba(255,255,255,0.8);
-  --hover-bg: rgba(0,0,0,0.08); --focus-color: #0a6cff;
-}
-[data-theme="amoled"] {
-  --bg-color: #000; --text-color: #fff; --control-bg: rgba(0,0,0,0.9);
-  --hover-bg: rgba(255,255,255,0.14); --focus-color: #3ea6ff;
-}
+/* Lyrics */
+.lyrics-line.current { color: var(--focus-color); font-weight: bold; }
 
 /* Transcript */
 .transcript-item { display: flex; gap: 10px; padding: 8px; border-radius: 4px; background: #1e1e1e; border: 1px solid #333; cursor: pointer; }
@@ -603,9 +562,8 @@ video::cue { font-family: var(--cue-font-family, sans-serif) !important; }
 #media-info-body span:first-child { color: #888; }
 
 /* Spatial audio, A-B loop, speed presets, visualizer settings sections */
-#spatial-mode, #chapter-select, #eq-preset-load { cursor: pointer; }
-#spatial-mode option, #chapter-select option, #eq-preset-load option { background: #2a2a2a; color: #fff; }
-#spatial-width, #vis-sensitivity { cursor: ew-resize; }
+#eq-preset-load { cursor: pointer; }
+#eq-preset-load option { background: #2a2a2a; color: #fff; }
 
 /* Speed preset buttons in a grid */
 #more-options-sidebar .action-btn-small { transition: background 0.15s; }
@@ -614,8 +572,18 @@ video::cue { font-family: var(--cue-font-family, sans-serif) !important; }
 /* EQ preset manager */
 #eq-preset-name::placeholder { color: #666; }
 
-/* Visualizer color pickers */
-#vis-color::-webkit-color-swatch-wrapper { padding: 0; }
-#vis-bg::-webkit-color-swatch-wrapper { padding: 0; }
-#vis-color::-webkit-color-swatch, #vis-bg::-webkit-color-swatch { border: none; border-radius: 3px; }
+/* High contrast reaches the panels, whose colours are set inline */
+body.high-contrast :is(#playlist-sidebar, #bookmarks-sidebar, #more-options-sidebar, .modal-content, #home-screen) :not(svg, path, input[type=range]) {
+  color: #fff !important; background-color: #000 !important; border-color: #fff !important;
+}
+body.high-contrast :is(#playlist-sidebar, #bookmarks-sidebar, #more-options-sidebar, .modal-content, #home-screen) [aria-pressed="true"],
+body.high-contrast .cmd-item.active,
+body.high-contrast .playlist-item.playing { background-color: #ffff00 !important; color: #000 !important; }
+
+/* Small windows and mini mode */
+.bottom-controls-row { flex-wrap: wrap; row-gap: 4px; }
+@media (max-width: 700px) {
+  .modal-content { min-width: 0 !important; width: calc(100vw - 16px); max-height: calc(100vh - 16px); }
+  .settings-sidebar { width: 110px !important; }
+}
 
